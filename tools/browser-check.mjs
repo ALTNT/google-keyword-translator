@@ -12,7 +12,8 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
 const extension = fileURLToPath(new URL("../extension/", import.meta.url));
-const contentOnly = process.env.CONTENT_ONLY === "1";
+const userscriptMode = process.env.USERSCRIPT === "1";
+const contentOnly = userscriptMode || process.env.CONTENT_ONLY === "1";
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "keyword-translator-check-"));
 let context;
 let passed = 0;
@@ -27,7 +28,7 @@ try {
     ],
     viewport: { width: 1100, height: 800 }
   });
-  console.log(`Browser: ${context.browser().version()}; mode: ${contentOnly ? "content script" : "loaded extension"}`);
+  console.log(`Browser: ${context.browser().version()}; mode: ${userscriptMode ? "userscript with mocked GM bridge" : contentOnly ? "content script" : "loaded extension"}`);
   const worker = contentOnly ? null : context.serviceWorkers()[0] ||
     await context.waitForEvent("serviceworker", { timeout: 15000 });
   if (worker) console.log(`Service worker loaded: ${worker.url()}`);
@@ -76,6 +77,19 @@ try {
     globalThis.testPending = [];
     globalThis.testOriginalFetch = globalThis.fetch;
     globalThis.testReply = () => ({ ok: true, text: "Cross-regional crop mapping" });
+    if (globalThis.testUseUserscript) {
+      globalThis.GM_xmlhttpRequest = options => {
+        testRequests.push(options.url);
+        const reply = () => options.onload({
+          status: testMode === "error" ? 503 : 200,
+          response: [[["Cross-regional crop mapping"]]]
+        });
+        if (testMode === "hold") testPending.push(reply);
+        else queueMicrotask(reply);
+        return { abort() { options.onabort(); } };
+      };
+      return;
+    }
     if (typeof chrome.runtime?.sendMessage === "function" && !globalThis.document) {
       globalThis.fetch = async url => {
         testRequests.push(String(url));
@@ -108,9 +122,14 @@ try {
       el.replaceWith(field);
     });
     if (contentOnly) {
+      await page.evaluate(value => { globalThis.testUseUserscript = value; }, userscriptMode);
       await page.evaluate(mock);
-      await page.addScriptTag({ path: path.join(extension, "shared.js") });
-      await page.addScriptTag({ path: path.join(extension, "content.js") });
+      if (userscriptMode) {
+        await page.addScriptTag({ path: fileURLToPath(new URL("../userscript/google-keyword-translator.user.js", import.meta.url)) });
+      } else {
+        await page.addScriptTag({ path: path.join(extension, "shared.js") });
+        await page.addScriptTag({ path: path.join(extension, "content.js") });
+      }
     }
     await page.waitForTimeout(100);
   }

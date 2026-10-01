@@ -2,6 +2,8 @@
 
 在 Google 搜索或 Google Scholar 的**网页搜索框**输入中文，按 **Ctrl + '**，关键词会翻译为英文并填回原搜索框。然后按回车搜索。无需 API Key，无需安装 Node.js 或其他依赖。
 
+**自己使用且不想开全局开发者模式：** 可以改用 [Tampermonkey 脚本版](userscript/安装说明.md)，安装商店版 Tampermonkey 并开启它的“允许用户脚本”后，导入 `userscript/google-keyword-translator.user.js`。Chrome 138+ 的 Chrome 系浏览器支持这种权限方式；无需将自己的扩展上架。
+
 ## 安装
 
 1. Chrome 打开 `chrome://extensions`；Brave 打开 `brave://extensions`。

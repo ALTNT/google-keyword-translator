@@ -5,6 +5,7 @@
   "description": "Translate Chinese Google / Scholar search keywords with Ctrl + apostrophe.",
   "scripts": {
     "build": "node tools/build.mjs",
+    "build:userscript": "node tools/build-userscript.mjs",
     "test": "node --test tests/*.test.mjs"
   }
 }
