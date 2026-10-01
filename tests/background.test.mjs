@@ -6,7 +6,7 @@ import test from "node:test";
 const extension = new URL("../extension/", import.meta.url);
 const read = name => fs.readFileSync(new URL(name, extension), "utf8");
 
-function harness(fetchImpl = async () => ({ ok: true, json: async () => [[["crop mapping"]]] })) {
+function harness(fetchImpl = async () => ({ ok: true, json: async () => [[["machine learning"]]] })) {
   let listener;
   let timerCallback;
   let timerCleared = false;
@@ -64,16 +64,16 @@ test("accepts Google and Scholar searches, rejects spoofed domains and unrelated
 });
 
 test("translates joined segments, safely encodes query, and omits credentials", async () => {
-  const h = harness(async () => ({ ok: true, json: async () => [[["crop "], ["mapping"]]] }));
-  const { result, keepAlive } = h.send(message("  作物 & NDVI #制图  "));
+  const h = harness(async () => ({ ok: true, json: async () => [[["machine "], ["learning"]]] }));
+  const { result, keepAlive } = h.send(message("  机器 & AI #学习  "));
   assert.equal(keepAlive, true);
   const response = await result;
   assert.equal(response.ok, true);
-  assert.equal(response.text, "crop mapping");
+  assert.equal(response.text, "machine learning");
   const [rawUrl, options] = h.calls[0];
   const url = new URL(rawUrl);
   assert.equal(url.origin, "https://translate.googleapis.com");
-  assert.equal(url.searchParams.get("q"), "作物 & NDVI #制图");
+  assert.equal(url.searchParams.get("q"), "机器 & AI #学习");
   assert.equal(url.searchParams.get("tl"), "en");
   assert.equal(url.searchParams.get("sl"), "auto");
   assert.equal(options.credentials, "omit");
@@ -84,7 +84,7 @@ test("translates joined segments, safely encodes query, and omits credentials", 
 
 test("validates text before making a request", async () => {
   const h = harness();
-  for (const text of [null, 123, "", "   ", "crop mapping", "中".repeat(2001)]) {
+  for (const text of [null, 123, "", "   ", "machine learning", "中".repeat(2001)]) {
     const { result, keepAlive } = h.send(message(text));
     assert.equal(keepAlive, false);
     assert.equal((await result).ok, false);
@@ -96,7 +96,7 @@ test("validates sender identity, page and frame", async () => {
   const h = harness();
   for (const patch of [{ id: "other-extension" }, { tab: undefined }, { frameId: 1 },
     { url: "https://www.google.com/maps" }, { url: "https://google.com.evil.example/" }]) {
-    const { result, keepAlive } = h.send(message("作物制图"), { ...h.sender, ...patch });
+    const { result, keepAlive } = h.send(message("机器学习"), { ...h.sender, ...patch });
     assert.equal(keepAlive, false);
     assert.equal((await result).ok, false);
   }
@@ -113,7 +113,7 @@ test("ignores unrelated messages", () => {
 test("reports service rate limiting and HTTP failure", async () => {
   for (const status of [429, 503]) {
     const h = harness(async () => ({ ok: false, status }));
-    const response = await h.send(message("作物制图")).result;
+    const response = await h.send(message("机器学习")).result;
     assert.equal(response.ok, false);
     assert.match(response.error, status === 429 ? /频繁/ : /503/);
     assert.equal(h.timerCleared(), true);
@@ -121,9 +121,9 @@ test("reports service rate limiting and HTTP failure", async () => {
 });
 
 test("rejects empty, malformed, unchanged or partly Chinese translations", async () => {
-  for (const data of [null, {}, [], [[]], [[null]], [[["作物制图"]]], [[["crop 制图"]]]]) {
+  for (const data of [null, {}, [], [[]], [[null]], [[["机器学习"]]], [[["machine 学习"]]]]) {
     const h = harness(async () => ({ ok: true, json: async () => data }));
-    const response = await h.send(message("作物制图")).result;
+    const response = await h.send(message("机器学习")).result;
     assert.equal(response.ok, false);
     assert.match(response.error, /英文译文/);
   }
@@ -131,7 +131,7 @@ test("rejects empty, malformed, unchanged or partly Chinese translations", async
 
 test("network failures return a readable error", async () => {
   const h = harness(async () => { throw new TypeError("Failed to fetch"); });
-  const response = await h.send(message("作物制图")).result;
+  const response = await h.send(message("机器学习")).result;
   assert.equal(response.ok, false);
   assert.match(response.error, /检查网络/);
 });
@@ -140,7 +140,7 @@ test("aborts a stalled fetch at the deadline", async () => {
   const h = harness((_url, options) => new Promise((_resolve, reject) => {
     options.signal.addEventListener("abort", () => reject(new Error("aborted")));
   }));
-  const { result } = h.send(message("作物制图"));
+  const { result } = h.send(message("机器学习"));
   h.expire();
   const response = await result;
   assert.equal(response.ok, false);

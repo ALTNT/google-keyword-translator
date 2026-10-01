@@ -2,9 +2,9 @@
 
 在 Google 搜索或 Google Scholar 的**网页搜索框**输入中文，按 **Ctrl + '**，关键词会翻译为英文并填回原搜索框。然后按回车搜索。无需 API Key，无需安装 Node.js 或其他依赖。
 
-**自己使用且不想开全局开发者模式：** 可以改用 [Tampermonkey 脚本版](userscript/安装说明.md)，安装商店版 Tampermonkey 并开启它的“允许用户脚本”后，导入 `userscript/google-keyword-translator.user.js`。Chrome 138+ 的 Chrome 系浏览器支持这种权限方式；无需将自己的扩展上架。
-
 ## 安装
+
+### 安装方式 1：加载浏览器扩展
 
 1. Chrome 打开 `chrome://extensions`；Brave 打开 `brave://extensions`。
 2. 打开右上角的“开发者模式”。
@@ -14,12 +14,25 @@
 
 此扩展使用 Manifest V3。Brave 支持 Chromium 扩展，参考 [Brave 官方说明](https://support.brave.app/hc/en-us/articles/360017909112-How-can-I-add-extensions-to-Brave)。同一份 `extension` 文件夹可分别加载到两款浏览器。
 
+### 安装方式 2：Tampermonkey 脚本
+
+适合自己使用且不想开启全局开发者模式的用户。Chrome 138+ 的 Chrome 系浏览器可以通过“允许用户脚本”授予脚本运行权限，无需将本项目上架。
+
+1. 从 [Tampermonkey 官方下载页面](https://www.tampermonkey.net/index.php?browser=chrome)进入 Chrome Web Store，安装稳定版 Tampermonkey。Brave 也可以安装这个商店版本。
+2. 在 `chrome://extensions` 或 `brave://extensions` 中找到 **Tampermonkey → 详情**，开启 **允许用户脚本 / Allow User Scripts**。全局“开发者模式”可以关闭。
+3. 点击 Tampermonkey 工具栏图标，选择 **添加新脚本 / Create a new script**。
+4. 打开 [google-keyword-translator.user.js](userscript/google-keyword-translator.user.js)，复制全部内容，替换脚本编辑器中的模板代码。
+5. 按 **Ctrl + S** 保存（Mac 使用 **Command + S**），确认脚本已启用。
+6. 如果安装过方式 1 的独立扩展，将它关闭，避免两个版本同时响应快捷键；刷新 Google / Google Scholar 网页。
+
+详细步骤见 [脚本安装说明](userscript/安装说明.md)。如果没有“允许用户脚本”开关，请更新浏览器和 Tampermonkey；权限方式参考 [Tampermonkey 官方说明](https://www.tampermonkey.net/faq.php?locale=en&q=Q209)。
+
 ## 使用
 
 1. 打开 <https://www.google.com/> 或 <https://scholar.google.com/>。
-2. 点击网页里的搜索框，输入中文关键词，例如“跨区域农作物制图”。
+2. 点击网页里的搜索框，输入中文关键词，例如“机器学习”。
 3. 完成中文输入法选词后，按住 **Ctrl**，再按英文键盘上的**单引号 `'` 键**（回车左侧的按键）。Mac 上使用 **Control**，而不是 Command。
-4. 搜索框将显示英文，例如 `Cross-regional crop mapping`。按回车搜索。
+4. 搜索框将显示英文，例如 `Machine learning`。按回车搜索。
 5. 替换后 12 秒内，可以点击右下角的“恢复中文”按钮，恢复原关键词。
 
 支持首页和搜索结果页的搜索框，也支持 Scholar 高级搜索的“包含全部字词”框。翻译整个搜索框内容，包含简体、繁体和中英混合文本。空白输入、纯英文输入不会发起翻译。

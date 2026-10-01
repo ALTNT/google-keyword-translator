@@ -43,22 +43,22 @@ test("generated userscript is standalone and declares only required GM access", 
 });
 
 test("GM transport joins translations, encodes text and requests no cookies", async () => {
-  const h = harness(options => options.onload({ status: 200, response: [[["crop "], ["mapping"]]] }));
-  const result = await h.translate("  作物 & #制图  ");
+  const h = harness(options => options.onload({ status: 200, response: [[["machine "], ["learning"]]] }));
+  const result = await h.translate("  机器 & #学习  ");
   assert.equal(result.ok, true);
-  assert.equal(result.text, "crop mapping");
-  assert.equal(new URL(h.request().url).searchParams.get("q"), "作物 & #制图");
+  assert.equal(result.text, "machine learning");
+  assert.equal(new URL(h.request().url).searchParams.get("q"), "机器 & #学习");
   assert.equal(h.request().anonymous, true);
   assert.equal(h.request().timeout, 12000);
   assert.equal(h.clears(), 1);
 });
 
 test("GM transport supports responseText and rejects invalid translations", async () => {
-  const h = harness(options => options.onload({ status: 200, responseText: '[[["remote sensing"]]]' }));
-  assert.equal((await h.translate("遥感")).text, "remote sensing");
-  for (const response of [null, {}, [], [[["遥感"]]], [[["remote 遥感"]]]]) {
+  const h = harness(options => options.onload({ status: 200, responseText: '[[["artificial intelligence"]]]' }));
+  assert.equal((await h.translate("人工智能")).text, "artificial intelligence");
+  for (const response of [null, {}, [], [[["人工智能"]]], [[["artificial 人工智能"]]]]) {
     const invalid = harness(options => options.onload({ status: 200, response }));
-    assert.equal((await invalid.translate("遥感")).ok, false);
+    assert.equal((await invalid.translate("人工智能")).ok, false);
   }
 });
 

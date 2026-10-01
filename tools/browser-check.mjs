@@ -76,13 +76,13 @@ try {
     globalThis.testMode = "success";
     globalThis.testPending = [];
     globalThis.testOriginalFetch = globalThis.fetch;
-    globalThis.testReply = () => ({ ok: true, text: "Cross-regional crop mapping" });
+    globalThis.testReply = () => ({ ok: true, text: "Machine learning" });
     if (globalThis.testUseUserscript) {
       globalThis.GM_xmlhttpRequest = options => {
         testRequests.push(options.url);
         const reply = () => options.onload({
           status: testMode === "error" ? 503 : 200,
-          response: [[["Cross-regional crop mapping"]]]
+          response: [[["Machine learning"]]]
         });
         if (testMode === "hold") testPending.push(reply);
         else queueMicrotask(reply);
@@ -95,7 +95,7 @@ try {
         testRequests.push(String(url));
         const reply = () => testMode === "error"
           ? new Response("unavailable", { status: 503 })
-          : new Response(JSON.stringify([[["Cross-regional crop mapping"]]]), {
+          : new Response(JSON.stringify([[["Machine learning"]]]), {
             headers: { "Content-Type": "application/json" }
           });
         if (testMode === "hold") return new Promise(resolve => testPending.push(() => resolve(reply())));
@@ -144,9 +144,9 @@ try {
     await fn(); passed++; console.log(`PASS ${label}`);
   }
   async function translate() {
-    await field.fill("跨区域农作物制图");
+    await field.fill("机器学习");
     await hotkey();
-    await page.waitForFunction(() => document.querySelector('[name="q"]').value === "Cross-regional crop mapping");
+    await page.waitForFunction(() => document.querySelector('[name="q"]').value === "Machine learning");
     await waitNotice("已翻译为英文");
   }
 
@@ -167,7 +167,7 @@ try {
     const { model } = await cdp.send("DOM.getBoxModel", { nodeId });
     const quad = model.border;
     await page.mouse.click((quad[0] + quad[4]) / 2, (quad[1] + quad[5]) / 2);
-    assert.equal(await field.inputValue(), "跨区域农作物制图");
+    assert.equal(await field.inputValue(), "机器学习");
     await waitNotice("已恢复");
   });
 
@@ -196,7 +196,7 @@ try {
   await check("empty and English text do not make network requests", async () => {
     const before = await count();
     await field.fill(""); await hotkey(); await waitNotice("请先");
-    await field.fill("crop mapping"); await hotkey(); await waitNotice("没有中文");
+    await field.fill("machine learning"); await hotkey(); await waitNotice("没有中文");
     assert.equal(await count(), before);
   });
 
@@ -257,7 +257,7 @@ try {
     await load("https://scholar.google.com/scholar_advanced");
     await page.locator('[name="as_q"]').fill("中文");
     await hotkey(); await waitNotice("已翻译");
-    assert.equal(await page.locator('[name="as_q"]').inputValue(), "Cross-regional crop mapping");
+    assert.equal(await page.locator('[name="as_q"]').inputValue(), "Machine learning");
   });
 
   await check("unrelated Google pages do not translate", async () => {
@@ -271,9 +271,9 @@ try {
     await check("live Google Translate request from the extension service worker", async () => {
       await worker.evaluate(() => { fetch = testOriginalFetch; });
       await load("https://www.google.com/search?q=test");
-      await field.fill("跨区域农作物制图"); await hotkey(); await waitNotice("已翻译为英文");
+      await field.fill("机器学习"); await hotkey(); await waitNotice("已翻译为英文");
       const value = await field.inputValue();
-      assert.match(value.toLowerCase(), /crop/);
+      assert.match(value.toLowerCase(), /machine learning/);
       console.log(`LIVE ${value}`);
     });
     if (process.env.LIVE_PAGES === "1") {
@@ -283,10 +283,10 @@ try {
           await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
           await page.waitForLoadState("load", { timeout: 30000 });
           await page.waitForTimeout(500);
-          await field.fill("跨区域农作物制图"); await hotkey();
+          await field.fill("机器学习"); await hotkey();
           await waitNotice("正在将关键词");
           await waitNotice("已翻译为英文", 18000);
-          assert.match((await field.inputValue()).toLowerCase(), /crop/);
+          assert.match((await field.inputValue()).toLowerCase(), /machine learning/);
           console.log(`LIVE PAGE ${url}`);
         }
       });
