@@ -1,73 +1,76 @@
-# 搜索关键词英译（Chrome / Brave）
+# 输入框中文英译（Tampermonkey）
 
-在 Google 搜索或 Google Scholar 的**网页搜索框**输入中文，按 **Ctrl + '**，关键词会翻译为英文并填回原搜索框。然后按回车搜索。无需 API Key，无需安装 Node.js 或其他依赖。
+在网页文本输入框中按 **Ctrl + '**，将中文翻译为英文并替换对应内容。支持 Chrome 和 Brave，使用 Tampermonkey 安装，无需 API Key 或 Node.js。本项目现仅保留油猴版。
 
 ## 安装
 
-### 安装方式 1：加载浏览器扩展
-
-1. Chrome 打开 `chrome://extensions`；Brave 打开 `brave://extensions`。
-2. 打开右上角的“开发者模式”。
-3. 点击“加载已解压的扩展程序”（Load unpacked）。
-4. 选择本项目中的 **`extension` 文件夹**，里面有 `manifest.json`。如果使用 ZIP，请先解压。
-5. 刷新已经打开的 Google / Google Scholar 网页。
-
-此扩展使用 Manifest V3。Brave 支持 Chromium 扩展，参考 [Brave 官方说明](https://support.brave.app/hc/en-us/articles/360017909112-How-can-I-add-extensions-to-Brave)。同一份 `extension` 文件夹可分别加载到两款浏览器。
-
-### 安装方式 2：Tampermonkey 脚本
-
-适合自己使用且不想开启全局开发者模式的用户。Chrome 138+ 的 Chrome 系浏览器可以通过“允许用户脚本”授予脚本运行权限，无需将本项目上架。
-
 1. 从 [Tampermonkey 官方下载页面](https://www.tampermonkey.net/index.php?browser=chrome)进入 Chrome Web Store，安装稳定版 Tampermonkey。Brave 也可以安装这个商店版本。
-2. 在 `chrome://extensions` 或 `brave://extensions` 中找到 **Tampermonkey → 详情**，开启 **允许用户脚本 / Allow User Scripts**。全局“开发者模式”可以关闭。
+2. 在 `chrome://extensions` 或 `brave://extensions` 中找到 **Tampermonkey → 详情**，开启 **允许用户脚本 / Allow User Scripts**。Chrome 138+ 的 Chrome 系浏览器和 Tampermonkey 5.3+ 支持这种权限方式，全局“开发者模式”可以关闭，参考 [官方 FAQ](https://www.tampermonkey.net/faq.php?locale=en&q=Q209)。没有此开关时，请更新浏览器和 Tampermonkey。
 3. 点击 Tampermonkey 工具栏图标，选择 **添加新脚本 / Create a new script**。
 4. 打开 [google-keyword-translator.user.js](userscript/google-keyword-translator.user.js)，复制全部内容，替换脚本编辑器中的模板代码。
-5. 按 **Ctrl + S** 保存（Mac 使用 **Command + S**），确认脚本已启用。
-6. 如果安装过方式 1 的独立扩展，将它关闭，避免两个版本同时响应快捷键；刷新 Google / Google Scholar 网页。
+5. 按 **Ctrl + S** 保存（Mac 使用 **Command + S**），确认脚本已启用。如果提示联网权限，允许连接 `translate.googleapis.com`。
+6. 刷新需要使用的网页。
 
-详细步骤见 [脚本安装说明](userscript/安装说明.md)。如果没有“允许用户脚本”开关，请更新浏览器和 Tampermonkey；权限方式参考 [Tampermonkey 官方说明](https://www.tampermonkey.net/faq.php?locale=en&q=Q209)。
+**升级旧版本：**在 Tampermonkey 管理面板中打开原来的脚本，使用上述文件的全部内容替换旧代码，保存并刷新网页。不要同时启用新旧两个脚本；如果之前安装过本项目的独立扩展，请关闭或移除它。
+
+详细步骤见 [脚本安装说明](userscript/安装说明.md)。无需将本项目发布到 Chrome Web Store。
 
 ## 使用
 
-1. 打开 <https://www.google.com/> 或 <https://scholar.google.com/>。
-2. 点击网页里的搜索框，输入中文关键词，例如“机器学习”。
-3. 完成中文输入法选词后，按住 **Ctrl**，再按英文键盘上的**单引号 `'` 键**（回车左侧的按键）。Mac 上使用 **Control**，而不是 Command。
-4. 搜索框将显示英文，例如 `Machine learning`。按回车搜索。
-5. 替换后 12 秒内，可以点击右下角的“恢复中文”按钮，恢复原关键词。
+1. 点击网页文本输入框，输入中文，例如“机器学习”。
+2. 根据需要选中文字，完成中文输入法选词后，按住 **Ctrl**，再按英文键盘上的**单引号 `'` 键**。Mac 上使用 **Control**。
+3. 译文会替换对应部分，例如 `Machine learning`。脚本不会提交表单、执行搜索或发送聊天消息。
+4. 替换后 12 秒内，可以点击右下角的 **恢复原文** 按钮。
 
-支持首页和搜索结果页的搜索框，也支持 Scholar 高级搜索的“包含全部字词”框。翻译整个搜索框内容，包含简体、繁体和中英混合文本。空白输入、纯英文输入不会发起翻译。
+| 输入状态 | 翻译与替换范围 |
+| --- | --- |
+| 选中文字，包含跨行选区 | 仅选中部分，其余文字保留 |
+| 单行输入框，没有选区 | 整个输入框 |
+| 多行文本框，没有选区 | 光标所在的实际行，以换行符分隔 |
+| 目标为空或不含中文 | 不发送请求，不替换内容 |
 
-等待期间若你修改内容、开始输入法组合输入，或返回时焦点已不在原搜索框、页面地址已改变，扩展不会直接覆盖当前输入。失败时保留原内容并提示原因。恢复中文也不会覆盖已修改的内容。
+“当前行”按实际换行符计算，屏幕宽度导致的自动折行仍属于同一行。光标停在换行符之前时，处理前一行；停在换行符之后时，处理后一行。空行不会回退为翻译整个文本框。
 
-支持 `google.com`、`google.com.hk`、`google.com.tw`、`google.cn`、`google.co.uk`、`google.ca`、`google.com.au`、`google.co.jp`、`google.co.kr`、`google.de`、`google.fr`、`google.co.in`、`google.com.sg` 的裸域名、`www` 和 `scholar` 子域名。域名是否提供相应服务取决于 Google；域名重定向至上述地址时也可使用。
+保留选区外内容、换行、空行、缩进和首尾空白。如果服务返回的换行或空行结构不一致，会保留原文并提示缩小选区。每次待翻译部分最多 2000 个字符；长文本框中的短选区仍可翻译。输入框本身的长度限制同样生效。
+
+翻译等待期间，若文本被修改、开始输入法组合输入、光标或选区改变、焦点移走、页面地址或网站启用状态改变，译文不会回填。恢复原文也不会覆盖之后的修改。
+
+## 支持范围
+
+- 普通 HTTP / HTTPS 网页中的 `input[type=text]`、`input[type=search]` 和 `textarea`，包括 Google、Google Scholar 及其他网站。
+- 动态创建的输入框及开放 Shadow DOM 中的上述输入框。
+- 密码、只读、禁用、数字输入等字段不处理；会排除可识别的验证码、付款信息和登录凭据字段。识别依赖网页标记，不能覆盖所有网站的自定义字段。
+- 浏览器地址栏、浏览器内部页面、iframe、封闭 Shadow DOM、`contenteditable` 富文本和自定义编辑器暂不支持。聊天或文档编辑器只有使用普通输入框或 `textarea` 时才在支持范围内。
+- 部分网页会拒绝脚本触发的输入事件，或由自己的状态管理覆盖内容，需要逐站适配。
+
+在 Tampermonkey 图标菜单中选择 **在此网站禁用中文英译** 可立即禁用当前网站；之后可通过 **启用此网站的中文英译** 恢复。设置按完整主机名保存，同一网站的其他标签页会同步更新。
 
 ## 翻译服务和隐私
 
-- 使用 `https://translate.googleapis.com/translate_a/single` 的免 Key 在线接口，目标语言固定为英文。这不是有稳定性保证的官方 Cloud Translation API，可能变更或限流。
-- 只有在搜索框内按快捷键时才发送关键词；普通输入不会触发翻译或上传，不存储搜索词，不请求历史记录、Cookie、剪贴板或全站访问权限。
-- 请求仅包含待翻译关键词和语言参数，不发送网页内容或网页 URL，不携带 Cookie。关键词仍会发送至 Google 服务进行处理。
-- 需要网络能够访问 Google 翻译。请求 12 秒超时，不做自动重试。
-- 搜索语法（如 `site:`、引号、布尔运算符）也会一起交给翻译服务，不能保证原样保留；复杂检索式建议先翻译自然语言部分，再手动添加检索语法。学术术语建议核对译文。
+- 使用 `https://translate.googleapis.com/translate_a/single` 的免 Key 在线接口，目标语言固定为英文。该接口没有稳定性保证，可能变更或限流。
+- 脚本在普通 HTTP / HTTPS 网站运行，只有在受支持的文本框内手动按快捷键时，才发送本次目标文本。单纯输入或选中文字不会上传。
+- 请求只包含目标文本和语言参数，不主动发送网页 URL 或其他页面内容，请求不携带 Cookie。目标文本仍会发送到 Google；请在翻译前确认选区或当前行的内容。
+- 不保存输入文本或译文；只通过 Tampermonkey 保存禁用的网站主机名。无需剪贴板或历史记录权限。
+- 请求 12 秒超时，不自动重试。失败保留原文，可稍后再按快捷键。
+- 翻译服务可能改变引号、布尔运算符等搜索语法。可以只选中自然语言部分进行翻译；专业术语建议核对译文。
 
 ## 常见问题
 
-- **按键无反应**：先刷新页面，确认光标位于网页搜索框、中文输入法已完成选词。浏览器地址栏和新标签页内置搜索框不在扩展范围内。如果操作系统、输入法或其他扩展抢占该组合键，需要解除冲突。
-- **翻译失败或超时**：检查网络是否可以访问 Google 翻译，稍后再次按快捷键。
-- **扩展重新加载后失效**：刷新搜索网页，重新注入内容脚本。
-- **在扩展快捷键设置中看不到 Ctrl + '**：这是预期行为。Chrome 的 [Commands API 支持键列表](https://developer.chrome.com/docs/extensions/reference/api/commands#supported_keys)没有单引号，本扩展直接监听搜索框的键盘事件，无需在该设置中配置。
-- **添加其他 Google 地区域名**：编辑 `extension/shared.js` 的 `domains` 数组，在项目根目录运行 `npm run build`，然后重新加载扩展并刷新网页。
+- **按键无反应**：刷新网页，确认脚本启用、允许用户脚本已开启、输入法已完成选词，且光标位于支持的输入框。检查当前网站是否被禁用，以及快捷键是否与系统、输入法或其他脚本冲突。
+- **多行内容只翻译一行**：这是未选中文字时的行为。要翻译多行，请先选中需要处理的部分。
+- **换行不一致提示**：翻译服务改变了原文分行结构，脚本因此保留原文。可以缩小选区或逐行翻译。
+- **翻译失败或超时**：检查网络能否访问 Google 翻译及 Tampermonkey 联网权限；遇到限流请稍后再试。
+- **富文本或聊天编辑器没有反应**：许多此类编辑器使用 `contenteditable` 或自定义文档模型，目前尚未适配。
 
 ## 开发
 
-安装和使用不需要构建。开发时使用 Node.js 22 或更新版本：
+安装使用不需要构建。开发使用 Node.js 22 或更新版本：
 
 ```sh
 npm run build
 npm test
 ```
 
-源代码不包含第三方运行时依赖或远程执行代码。跨域翻译请求通过后台 service worker 发起，遵循 [Chrome 扩展跨域请求文档](https://developer.chrome.com/docs/extensions/develop/concepts/network-requests)。
+`userscript/config.js` 定义选区与格式规则，`userscript/transport.js` 封装 Tampermonkey 请求，`userscript/content.js` 处理文本框和网站菜单。构建后生成可直接安装的单文件脚本，运行时无需第三方库或远程执行代码。
 
-测试覆盖后台请求参数、错误处理、消息来源验证，以及搜索框快捷键、输入法组合输入、异步返回覆盖保护和恢复中文。真实页面检查步骤：分别在两款浏览器加载扩展，测试 Google 首页、Google 搜索结果页、Scholar 首页和结果页；输入关键词后按 Ctrl + '，确认英文填回，再按回车搜索；模拟断网时应保留原内容。
-
-`tools/browser-check.mjs` 提供可选的浏览器集成测试，需自行提供 Playwright（设置 `PLAYWRIGHT_MODULE`）和浏览器可执行文件（设置 `BROWSER_EXECUTABLE`）。它使用独立临时浏览器配置，运行后删除，不修改日常配置。Brave/Chromium 加载完整扩展；近期正式版 Chrome 不允许命令行加载扩展，可设置 `CONTENT_ONLY=1` 检查搜索框脚本。默认使用网页测试夹具及模拟翻译响应，另在完整扩展模式下验证一次真实翻译请求；设置 `LIVE_PAGES=1` 可追加真实 Google 和 Scholar 首页检查。
+可选浏览器检查使用 Playwright 和独立临时浏览器配置。通过 `PLAYWRIGHT_MODULE` 指定 Playwright 路径，`BROWSER_EXECUTABLE` 指定 Chrome 或 Brave 可执行文件，然后运行 `npm run test:browser`。检查使用网页夹具及模拟的 Tampermonkey API 和翻译响应，不涉及日常浏览器配置。覆盖范围和限制见 [验证记录](验证记录.md)。

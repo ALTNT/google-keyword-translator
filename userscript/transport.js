@@ -4,7 +4,7 @@ function translateSearchKeywords(text) {
     const config = KeywordTranslatorConfig;
     if (typeof text !== "string" || !text.trim() || text.length > config.maxLength ||
         !config.containsChinese(text)) {
-      resolve({ ok: false, error: "请输入包含中文的关键词（最多 2000 个字符）。" });
+      resolve({ ok: false, error: "请输入或选中包含中文的文本（最多 2000 个字符）。" });
       return;
     }
     if (typeof GM_xmlhttpRequest !== "function") {
@@ -42,7 +42,7 @@ function translateSearchKeywords(text) {
         onload(response) {
           if (settled) return;
           if (response.status === 429) return fail("请求过于频繁，请稍后重试。");
-          if (response.status < 200 || response.status >= 300) {
+          if (!(response.status >= 200 && response.status < 300)) {
             return fail(`翻译服务暂时不可用（HTTP ${response.status}）。`);
           }
           try {
@@ -55,11 +55,11 @@ function translateSearchKeywords(text) {
               Array.isArray(segment) && typeof segment[0] === "string" ? segment[0] : ""
             ).join("").trim();
             if (!translated || translated === text.trim() || config.containsChinese(translated)) {
-              return fail("未获得完整的英文译文，请调整关键词后重试。");
+              return fail("未获得完整的英文译文，请调整文本或选区后重试。");
             }
-            finish({ ok: true, text: translated });
-          } catch {
-            fail("翻译服务返回了无法识别的数据，请稍后重试。");
+            finish({ ok: true, text: config.restoreFormatting(text, translated) });
+          } catch (error) {
+            fail(error.message?.startsWith("译文") ? error.message : "翻译服务返回了无法识别的数据，请稍后重试。");
           }
         },
         onerror: () => fail("无法连接 Google 翻译，请检查网络或脚本联网权限后重试。"),

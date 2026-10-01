@@ -1,7 +1,5 @@
-// Optional integration checks using Playwright and a disposable browser profile.
-// Set PLAYWRIGHT_MODULE to a Playwright package directory if it is not installed locally.
-// Set BROWSER_EXECUTABLE to Brave, Chromium or Chrome. Chrome uses CONTENT_ONLY=1
-// because recent branded Chrome releases disable command-line extension loading.
+// Optional browser checks. Provide Playwright and BROWSER_EXECUTABLE.
+// GM functions are mocked; this verifies the generated script, not manager installation.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -11,10 +9,8 @@ import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
-const extension = fileURLToPath(new URL("../extension/", import.meta.url));
-const userscriptMode = process.env.USERSCRIPT === "1";
-const contentOnly = userscriptMode || process.env.CONTENT_ONLY === "1";
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), "keyword-translator-check-"));
+const script = fileURLToPath(new URL("../userscript/google-keyword-translator.user.js", import.meta.url));
+const profile = fs.mkdtempSync(path.join(os.tmpdir(), "text-translator-check-"));
 let context;
 let passed = 0;
 
@@ -22,28 +18,20 @@ try {
   context = await chromium.launchPersistentContext(profile, {
     executablePath: process.env.BROWSER_EXECUTABLE,
     headless: true,
-    ignoreDefaultArgs: ["--disable-extensions"],
-    args: contentOnly ? [] : [
-      `--disable-extensions-except=${extension}`, `--load-extension=${extension}`
-    ],
     viewport: { width: 1100, height: 800 }
   });
-  console.log(`Browser: ${context.browser().version()}; mode: ${userscriptMode ? "userscript with mocked GM bridge" : contentOnly ? "content script" : "loaded extension"}`);
-  const worker = contentOnly ? null : context.serviceWorkers()[0] ||
-    await context.waitForEvent("serviceworker", { timeout: 15000 });
-  if (worker) console.log(`Service worker loaded: ${worker.url()}`);
-
-  const fixture = `<!doctype html><html><head><meta charset="utf-8"></head><body>
-    <form><textarea name="q" aria-label="Search"></textarea><input name="as_q">
-    <input name="unrelated"><button type="submit">Search</button></form>
-    <script>window.submissions = 0; window.inputs = 0; window.changes = 0;
-    document.querySelector('form').addEventListener('submit', e => {e.preventDefault(); submissions++});
-    document.addEventListener('input', () => inputs++);
-    document.addEventListener('change', () => changes++);</script></body></html>`;
+  console.log(`Browser: ${context.browser().version()}; generated userscript with mocked GM APIs`);
   const page = await context.newPage();
   page.setDefaultTimeout(6000);
   await page.route("**/*", route => route.request().resourceType() === "document"
-    ? route.fulfill({ contentType: "text/html", body: fixture }) : route.abort());
+    ? route.fulfill({ contentType: "text/html", body: `<!doctype html><meta charset="utf-8">
+      <form><input id="single" type="text"><input id="search" type="search">
+      <textarea id="multi" rows="5"></textarea><button type="submit">Submit</button></form>
+      <div id="rich" contenteditable="true">机器学习</div><div id="shadow"></div>
+      <script>window.submissions=0; window.inputs=0; window.changes=0;
+      document.querySelector('form').onsubmit=e=>{e.preventDefault();submissions++};
+      document.addEventListener('input',()=>inputs++);
+      document.addEventListener('change',()=>changes++);</script>` }) : route.abort());
   const cdp = await context.newCDPSession(page);
 
   async function noticeNode(text) {
@@ -60,240 +48,260 @@ try {
     }
     return search(root);
   }
-
-  async function waitNotice(text, timeout = 6000) {
-    const deadline = Date.now() + timeout;
+  async function waitNotice(text) {
+    const deadline = Date.now() + 6000;
     while (Date.now() < deadline) {
       const node = await noticeNode(text);
       if (node) return node;
-      await page.waitForTimeout(50);
+      await page.waitForTimeout(40);
     }
     throw new Error(`Notice missing: ${text}`);
   }
-
-  const mock = () => {
-    globalThis.testRequests = [];
-    globalThis.testMode = "success";
-    globalThis.testPending = [];
-    globalThis.testOriginalFetch = globalThis.fetch;
-    globalThis.testReply = () => ({ ok: true, text: "Machine learning" });
-    if (globalThis.testUseUserscript) {
+  async function undo() {
+    const nodeId = await waitNotice("恢复原文");
+    const { model } = await cdp.send("DOM.getBoxModel", { nodeId });
+    const q = model.border;
+    await page.mouse.click((q[0] + q[4]) / 2, (q[1] + q[5]) / 2);
+  }
+  async function load(url = "https://example.test/editor", hosts = []) {
+    await page.goto(url);
+    await page.evaluate(hosts => {
+      globalThis.testRequests = [];
+      globalThis.testMode = "success";
+      globalThis.testPending = [];
+      globalThis.testReplyText = null;
+      globalThis.testHosts = hosts;
+      globalThis.testMenus = {};
+      globalThis.testListeners = [];
+      globalThis.testMenuId = 0;
+      globalThis.GM_getValue = (_key, fallback) => testHosts || fallback;
+      globalThis.GM_setValue = (key, value) => {
+        const old = testHosts; testHosts = value;
+        testListeners.forEach(fn => fn(key, old, value, false));
+      };
+      globalThis.GM_registerMenuCommand = (label, fn) => {
+        const id = ++testMenuId; testMenus[id] = { label, fn }; return id;
+      };
+      globalThis.GM_unregisterMenuCommand = id => { delete testMenus[id]; };
+      globalThis.GM_addValueChangeListener = (_key, fn) => { testListeners.push(fn); return testListeners.length; };
       globalThis.GM_xmlhttpRequest = options => {
-        testRequests.push(options.url);
-        const reply = () => options.onload({
-          status: testMode === "error" ? 503 : 200,
-          response: [[["Machine learning"]]]
-        });
+        testRequests.push(options);
+        const reply = () => {
+          const source = new URL(options.url).searchParams.get("q");
+          const translated = testReplyText ?? source.replaceAll("机器学习", "Machine learning")
+            .replaceAll("人工智能", "AI").replaceAll("中文", "Chinese")
+            .replace(/\p{Script=Han}+/gu, "Translated");
+          options.onload({ status: testMode === "error" ? 503 : 200, response: [[[translated]]] });
+        };
         if (testMode === "hold") testPending.push(reply);
         else queueMicrotask(reply);
         return { abort() { options.onabort(); } };
       };
-      return;
-    }
-    if (typeof chrome.runtime?.sendMessage === "function" && !globalThis.document) {
-      globalThis.fetch = async url => {
-        testRequests.push(String(url));
-        const reply = () => testMode === "error"
-          ? new Response("unavailable", { status: 503 })
-          : new Response(JSON.stringify([[["Machine learning"]]]), {
-            headers: { "Content-Type": "application/json" }
-          });
-        if (testMode === "hold") return new Promise(resolve => testPending.push(() => resolve(reply())));
-        return reply();
-      };
-    } else {
-      chrome.runtime = {
-        sendMessage: async message => {
-          testRequests.push(message);
-          const reply = () => testMode === "error"
-            ? { ok: false, error: "翻译服务暂时不可用（HTTP 503）。" } : testReply();
-          if (testMode === "hold") return new Promise(resolve => testPending.push(() => resolve(reply())));
-          return reply();
-        }
-      };
-    }
-  };
-  if (worker) await worker.evaluate(mock);
-  const state = worker || page;
-  async function load(url, input = false) {
-    await page.goto(url);
-    if (input) await page.locator('[name="q"]').evaluate(el => {
-      const field = document.createElement("input"); field.name = "q"; field.type = "text";
-      el.replaceWith(field);
-    });
-    if (contentOnly) {
-      await page.evaluate(value => { globalThis.testUseUserscript = value; }, userscriptMode);
-      await page.evaluate(mock);
-      if (userscriptMode) {
-        await page.addScriptTag({ path: fileURLToPath(new URL("../userscript/google-keyword-translator.user.js", import.meta.url)) });
-      } else {
-        await page.addScriptTag({ path: path.join(extension, "shared.js") });
-        await page.addScriptTag({ path: path.join(extension, "content.js") });
-      }
-    }
-    await page.waitForTimeout(100);
+    }, hosts);
+    await page.addScriptTag({ path: script });
   }
-  const field = page.locator('[name="q"]');
+  const single = page.locator("#single");
+  const multi = page.locator("#multi");
   const hotkey = () => page.keyboard.press("Control+Quote");
-  const count = () => state.evaluate(() => testRequests.length);
-  const mode = value => state.evaluate(value => { testMode = value; }, value);
-  const resolvePending = () => state.evaluate(() => {
-    testMode = "success"; testPending.splice(0).forEach(resolve => resolve());
+  const count = () => page.evaluate(() => testRequests.length);
+  const select = (field, start, end = start, direction = "none") => field.evaluate(
+    (el, range) => { el.focus(); el.setSelectionRange(...range); }, [start, end, direction]);
+  const input = (field, value) => field.fill(value);
+  const mode = value => page.evaluate(value => { testMode = value; }, value);
+  const resolvePending = () => page.evaluate(() => {
+    testMode = "success"; testPending.splice(0).forEach(fn => fn());
   });
+  const toggle = () => page.evaluate(() => Object.values(testMenus)[0].fn());
+  async function hold(field, value) {
+    await mode("hold"); await input(field, value);
+    const before = await count(); await hotkey();
+    await page.waitForFunction(before => testRequests.length > before, before);
+  }
   async function check(label, fn) {
     await fn(); passed++; console.log(`PASS ${label}`);
   }
-  async function translate() {
-    await field.fill("机器学习");
-    await hotkey();
-    await page.waitForFunction(() => document.querySelector('[name="q"]').value === "Machine learning");
-    await waitNotice("已翻译为英文");
-  }
 
-  for (const [url, input] of [
-    ["https://www.google.com/", false], ["https://www.google.com/search?q=test", false],
-    ["https://scholar.google.com/", true], ["https://scholar.google.com/scholar?q=test", true]
-  ]) {
-    await check(`Ctrl + ' on ${url}`, async () => {
-      await load(url, input);
-      await translate();
+  for (const url of ["https://www.google.com/", "https://scholar.google.com/",
+    "https://www.bing.com/search?q=test", "https://example.test/editor", "http://localhost:8000/form"]) {
+    await check(`ordinary inputs on ${url}`, async () => {
+      await load(url); await input(single, "机器学习"); await hotkey(); await waitNotice("已将输入内容");
+      assert.equal(await single.inputValue(), "Machine learning");
+      await input(page.locator("#search"), "机器学习"); await hotkey(); await waitNotice("已将输入内容");
+      assert.equal(await page.locator("#search").inputValue(), "Machine learning");
       assert.equal(await page.evaluate(() => submissions), 0);
       assert.ok(await page.evaluate(() => inputs > 0 && changes > 0));
     });
   }
 
-  await check("restore original Chinese with the visible button", async () => {
-    const nodeId = await waitNotice("恢复中文");
-    const { model } = await cdp.send("DOM.getBoxModel", { nodeId });
-    const quad = model.border;
-    await page.mouse.click((quad[0] + quad[4]) / 2, (quad[1] + quad[5]) / 2);
-    assert.equal(await field.inputValue(), "机器学习");
-    await waitNotice("已恢复");
+  await check("textarea translates only the current logical line, preserving indentation", async () => {
+    await load();
+    const value = "保留上行\n  机器学习  \n保留下行";
+    await input(multi, value); await select(multi, value.indexOf("机器学习") + 1);
+    await hotkey(); await waitNotice("已将当前行");
+    assert.equal(await multi.inputValue(), "保留上行\n  Machine learning  \n保留下行");
+    assert.equal(await page.evaluate(() => new URL(testRequests[0].url).searchParams.get("q")), "机器学习");
   });
-
-  await check("restore does not overwrite newer edits", async () => {
-    await translate();
-    await field.fill("最新输入");
-    const nodeId = await waitNotice("恢复中文");
-    const { model } = await cdp.send("DOM.getBoxModel", { nodeId });
-    const quad = model.border;
-    await page.mouse.click((quad[0] + quad[4]) / 2, (quad[1] + quad[5]) / 2);
-    assert.equal(await field.inputValue(), "最新输入");
-    await waitNotice("未覆盖当前内容");
-  });
-
-  await check("no translation for other modifier keys or unrelated fields", async () => {
+  await check("empty and English current lines never fall back to the entire textarea", async () => {
     const before = await count();
-    await field.fill("中文");
-    await page.keyboard.press("Meta+Quote");
-    await page.keyboard.press("Control+Shift+Quote");
-    await page.locator('[name="unrelated"]').fill("中文");
-    await hotkey();
-    await page.waitForTimeout(150);
+    await input(multi, "中文\n\nEnglish\n中文"); await select(multi, 3);
+    await hotkey(); await waitNotice("当前行为空");
+    await select(multi, 5); await hotkey(); await waitNotice("没有中文");
+    assert.equal(await count(), before);
+    assert.equal(await multi.inputValue(), "中文\n\nEnglish\n中文");
+  });
+  await check("visual wrapping is still one logical line", async () => {
+    await multi.evaluate(el => { el.style.width = "55px"; });
+    await input(multi, "机器学习".repeat(10)); await select(multi, 5);
+    await hotkey(); await waitNotice("已将当前行");
+    assert.equal(await multi.inputValue(), "Machine learning".repeat(10));
+  });
+  await check("selected multi-line text changes only the selection and preserves blank lines", async () => {
+    const value = "前缀：机器学习\n  \n\t人工智能：后缀";
+    const start = value.indexOf("机器学习"); const end = value.indexOf("人工智能") + 4;
+    await input(multi, value); await select(multi, start, end, "backward");
+    await hotkey(); await waitNotice("已将选中文字");
+    assert.equal(await multi.inputValue(), "前缀：Machine learning\n  \n\tAI：后缀");
+    await undo(); await waitNotice("已恢复原文");
+    assert.equal(await multi.inputValue(), value);
+    assert.deepEqual(await multi.evaluate(el => [el.selectionStart, el.selectionEnd, el.selectionDirection]), [start, end, "backward"]);
+  });
+  await check("single-line partial selection preserves search syntax and surrounding text", async () => {
+    await input(single, "site:example.com 机器学习 AND AI"); await select(single, 17, 21);
+    await hotkey(); await waitNotice("已将选中文字");
+    assert.equal(await single.inputValue(), "site:example.com Machine learning AND AI");
+  });
+  await check("restore does not overwrite subsequent edits", async () => {
+    await input(single, "机器学习"); await hotkey(); await waitNotice("已将输入内容");
+    await input(single, "新的内容"); await undo(); await waitNotice("未覆盖当前内容");
+    assert.equal(await single.inputValue(), "新的内容");
+  });
+  await check("empty, English and oversized targets do not send requests", async () => {
+    const before = await count();
+    await input(single, ""); await hotkey(); await waitNotice("为空");
+    await input(single, "English"); await hotkey(); await waitNotice("没有中文");
+    await input(single, "中".repeat(2001)); await hotkey(); await waitNotice("超过 2000");
     assert.equal(await count(), before);
   });
-
-  await check("empty and English text do not make network requests", async () => {
-    const before = await count();
-    await field.fill(""); await hotkey(); await waitNotice("请先");
-    await field.fill("machine learning"); await hotkey(); await waitNotice("没有中文");
+  await check("small selections in large text fields remain supported", async () => {
+    await input(multi, "x".repeat(3000) + "机器学习"); await select(multi, 3000, 3004);
+    await hotkey(); await waitNotice("已将选中文字");
+    assert.equal(await multi.inputValue(), "x".repeat(3000) + "Machine learning");
+  });
+  await check("IME composition and other modifier combinations do not translate", async () => {
+    const before = await count(); await input(single, "中文");
+    await single.dispatchEvent("compositionstart"); await hotkey();
+    await single.dispatchEvent("compositionend");
+    await page.keyboard.press("Meta+Quote"); await page.keyboard.press("Control+Shift+Quote");
     assert.equal(await count(), before);
   });
-
-  await check("IME composition does not trigger translation", async () => {
+  await check("webpage-generated shortcuts cannot trigger a translation", async () => {
     const before = await count();
-    await field.fill("中文");
-    await field.dispatchEvent("compositionstart");
-    await hotkey();
-    await field.dispatchEvent("compositionend");
-    await page.waitForTimeout(100);
+    await single.dispatchEvent("keydown", { key: "'", code: "Quote", ctrlKey: true });
     assert.equal(await count(), before);
   });
-
-  await check("pending responses never overwrite edits, even if text is changed back", async () => {
-    await mode("hold");
-    const before = await count();
-    await field.fill("原始中文"); await hotkey();
-    while (await count() === before) await page.waitForTimeout(50);
-    await field.fill("修改后的中文"); await field.fill("原始中文");
-    await resolvePending(); await waitNotice("未替换关键词");
-    assert.equal(await field.inputValue(), "原始中文");
+  await check("pending responses cannot overwrite edits even when changed back", async () => {
+    await hold(single, "机器学习"); await input(single, "中文"); await input(single, "机器学习");
+    await resolvePending(); await waitNotice("未替换内容");
+    assert.equal(await single.inputValue(), "机器学习");
   });
-
+  await check("changing selection while waiting cancels replacement", async () => {
+    await hold(single, "机器学习 中文"); await select(single, 0, 4);
+    await resolvePending(); await waitNotice("未替换内容");
+    assert.equal(await single.inputValue(), "机器学习 中文");
+  });
   await check("pending responses do not steal focus", async () => {
-    await mode("hold");
+    await hold(single, "机器学习"); await multi.focus();
+    await resolvePending(); await waitNotice("未替换内容");
+    assert.equal(await single.inputValue(), "机器学习");
+  });
+  await check("repeated shortcuts while waiting send only one request", async () => {
+    const before = await count(); await hold(single, "机器学习"); await hotkey(); await hotkey();
+    assert.equal(await count(), before + 1); await resolvePending(); await waitNotice("已将输入内容");
+  });
+  await check("service errors preserve text and allow retry", async () => {
+    await mode("error"); await input(single, "机器学习"); await hotkey(); await waitNotice("503");
+    assert.equal(await single.inputValue(), "机器学习");
+    await mode("success"); await hotkey(); await waitNotice("已将输入内容");
+  });
+  await check("maxlength is respected instead of inserting an overlong translation", async () => {
+    await single.evaluate(el => { el.maxLength = 5; });
+    await input(single, "机器学习"); await hotkey(); await waitNotice("长度限制");
+    assert.equal(await single.inputValue(), "机器学习");
+    await single.evaluate(el => { el.removeAttribute("maxlength"); });
+  });
+  await check("a translation dropping newlines does not flatten the selected text", async () => {
+    await input(multi, "机器学习\n人工智能"); await select(multi, 0, 9);
+    await page.evaluate(() => { testReplyText = "Machine learning AI"; });
+    await hotkey(); await waitNotice("换行");
+    assert.equal(await multi.inputValue(), "机器学习\n人工智能");
+    await page.evaluate(() => { testReplyText = null; });
+  });
+  await check("structured and sensitive fields do not translate", async () => {
     const before = await count();
-    await field.fill("中文"); await hotkey();
-    while (await count() === before) await page.waitForTimeout(50);
-    await page.locator('[name="unrelated"]').focus();
-    await resolvePending(); await waitNotice("未替换关键词");
-    assert.equal(await field.inputValue(), "中文");
-  });
-
-  await check("repeated shortcut while pending sends only one request", async () => {
-    await mode("hold");
-    const before = await count();
-    await field.fill("中文"); await hotkey(); await hotkey();
-    await page.waitForTimeout(150);
-    assert.equal(await count(), before + 1);
-    await resolvePending(); await waitNotice("已翻译");
-  });
-
-  await check("service errors preserve original text and allow retry", async () => {
-    await mode("error");
-    await field.fill("中文"); await hotkey(); await waitNotice("503");
-    assert.equal(await field.inputValue(), "中文");
-    await mode("success"); await translate();
-  });
-
-  await check("dynamically replaced fields are supported", async () => {
-    await field.evaluate(el => {
-      const next = document.createElement("textarea"); next.name = "q"; el.replaceWith(next);
-    });
-    await translate();
-  });
-
-  await check("Scholar advanced all-words search field is supported", async () => {
-    await load("https://scholar.google.com/scholar_advanced");
-    await page.locator('[name="as_q"]').fill("中文");
-    await hotkey(); await waitNotice("已翻译");
-    assert.equal(await page.locator('[name="as_q"]').inputValue(), "Machine learning");
-  });
-
-  await check("unrelated Google pages do not translate", async () => {
-    await load("https://www.google.com/maps");
-    const before = await count();
-    await field.fill("中文"); await hotkey(); await page.waitForTimeout(100);
+    for (const attrs of [{type:"password"}, {type:"email"}, {type:"url"}, {type:"number"}, {type:"tel"},
+      {type:"text", autocomplete:"one-time-code"}, {type:"text", autocomplete:"cc-number"},
+      {type:"text", id:"verification_code"}, {type:"text", inputmode:"numeric"},
+      {type:"text", readonly:""}, {type:"text", "aria-hidden":"true"}]) {
+      await page.evaluate(attrs => {
+        document.querySelector("#excluded")?.remove();
+        const field = document.createElement("input"); field.id="excluded";
+        for (const [key, value] of Object.entries(attrs)) field.setAttribute(key,value);
+        field.value="中文"; document.body.append(field); field.focus();
+      }, attrs);
+      await hotkey();
+    }
     assert.equal(await count(), before);
   });
-
-  if (worker) {
-    await check("live Google Translate request from the extension service worker", async () => {
-      await worker.evaluate(() => { fetch = testOriginalFetch; });
-      await load("https://www.google.com/search?q=test");
-      await field.fill("机器学习"); await hotkey(); await waitNotice("已翻译为英文");
-      const value = await field.inputValue();
-      assert.match(value.toLowerCase(), /machine learning/);
-      console.log(`LIVE ${value}`);
+  await check("disabled fieldsets and rich editors are excluded", async () => {
+    const before = await count();
+    await page.evaluate(() => {
+      const group=document.createElement("fieldset"); group.disabled=true;
+      const field=document.createElement("input"); field.value="中文"; group.append(field);
+      document.body.append(group); field.focus();
     });
-    if (process.env.LIVE_PAGES === "1") {
-      await check("real Google and Scholar home pages", async () => {
-        await page.unroute("**/*");
-        for (const url of ["https://www.google.com/", "https://scholar.google.com/"]) {
-          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
-          await page.waitForLoadState("load", { timeout: 30000 });
-          await page.waitForTimeout(500);
-          await field.fill("机器学习"); await hotkey();
-          await waitNotice("正在将关键词");
-          await waitNotice("已翻译为英文", 18000);
-          assert.match((await field.inputValue()).toLowerCase(), /machine learning/);
-          console.log(`LIVE PAGE ${url}`);
-        }
-      });
-    }
-  }
+    await hotkey(); await page.locator("#rich").focus(); await hotkey();
+    assert.equal(await count(), before);
+    assert.equal(await page.locator("#rich").textContent(), "机器学习");
+  });
+  await check("dynamically created inputs and open Shadow DOM fields work", async () => {
+    await page.evaluate(() => {
+      const root=document.querySelector("#shadow").attachShadow({mode:"open"});
+      const field=document.createElement("textarea"); field.id="shadow-field"; root.append(field);
+    });
+    const field=page.locator("#shadow-field");
+    await input(field,"机器学习"); await hotkey(); await waitNotice("已将当前行");
+    assert.equal(await field.inputValue(),"Machine learning");
+    await undo(); await waitNotice("已恢复原文"); assert.equal(await field.inputValue(),"机器学习");
+  });
+  await check("sites rejecting synthetic input receive a compatibility notice", async () => {
+    await single.evaluate(el => { el.addEventListener("input", e => { if(!e.isTrusted) el.value="机器学习"; }, {once:true}); });
+    await single.evaluate(el => { el.value="机器学习"; el.focus(); el.setSelectionRange(4,4); });
+    await hotkey(); await waitNotice("网站未接受译文");
+    assert.equal(await single.inputValue(),"机器学习");
+  });
+  await check("site disable and enable menu works immediately and survives reload", async () => {
+    await toggle(); const hosts=await page.evaluate(()=>testHosts);
+    assert.ok(hosts.includes("example.test"));
+    await input(single,"机器学习"); const before=await count(); await hotkey();
+    assert.equal(await count(),before);
+    await load("https://example.test/editor",hosts); await input(single,"机器学习"); await hotkey();
+    assert.equal(await count(),0);
+    await toggle(); await hotkey(); await waitNotice("已将输入内容");
+    assert.equal(await single.inputValue(),"Machine learning");
+  });
+  await check("disabling and re-enabling a site invalidates its pending translation", async () => {
+    await hold(single,"机器学习"); await toggle(); await toggle();
+    await resolvePending(); await waitNotice("未替换内容");
+    assert.equal(await single.inputValue(),"机器学习");
+  });
+  await check("site setting changes from another tab update the current instance", async () => {
+    await page.evaluate(()=>{testHosts=["example.test"];testListeners.forEach(fn=>fn("disabledHosts",[],testHosts,true));});
+    const before=await count(); await input(single,"机器学习"); await hotkey();
+    assert.equal(await count(),before);
+    assert.match(await page.evaluate(()=>Object.values(testMenus)[0].label),/启用/);
+  });
   console.log(`${passed} browser checks passed.`);
 } finally {
   await context?.close();
-  fs.rmSync(profile, { recursive: true, force: true });
+  fs.rmSync(profile,{recursive:true,force:true});
 }

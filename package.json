@@ -1,11 +1,12 @@
 {
   "name": "google-keyword-translator",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
-  "description": "Translate Chinese Google / Scholar search keywords with Ctrl + apostrophe.",
+  "description": "Translate selected Chinese text or the current line in web text fields with Ctrl + apostrophe.",
   "scripts": {
-    "build": "node tools/build.mjs",
+    "build": "node tools/build-userscript.mjs",
     "build:userscript": "node tools/build-userscript.mjs",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test tests/*.test.mjs",
+    "test:browser": "node tools/browser-check.mjs"
   }
 }
