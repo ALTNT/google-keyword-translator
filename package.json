@@ -2,11 +2,12 @@
   "name": "google-keyword-translator",
   "version": "1.1.0",
   "private": true,
-  "description": "Translate selected Chinese text or the current line in web text fields with Ctrl + apostrophe.",
+  "description": "Chinese-to-English text replacement with Tampermonkey and macOS Hammerspoon.",
   "scripts": {
     "build": "node tools/build-userscript.mjs",
     "build:userscript": "node tools/build-userscript.mjs",
     "test": "node --test tests/*.test.mjs",
-    "test:browser": "node tools/browser-check.mjs"
+    "test:browser": "node tools/browser-check.mjs",
+    "test:hammerspoon": "python3 tools/run-lua-tests.py"
   }
 }

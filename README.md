@@ -1,8 +1,8 @@
-# 输入框中文英译（Tampermonkey）
+# 输入框中文英译（Tampermonkey / Hammerspoon）
 
-在网页文本输入框中按 **Ctrl + '**，将中文翻译为英文并替换对应内容。支持 Chrome 和 Brave，使用 Tampermonkey 安装，无需 API Key 或 Node.js。本项目现仅保留油猴版。
+将文本框中的中文翻译为英文并替换对应内容。提供两个版本：**油猴版**用于 Chrome / Brave 等浏览器网页，按 **Ctrl + '**；**Hammerspoon 版**用于 macOS 中支持辅助功能的文本框，默认按 **Ctrl + Option + '**。无需 API Key，油猴版继续保留。
 
-## 安装
+## 安装方式 1：Tampermonkey（网页）
 
 1. 从 [Tampermonkey 官方下载页面](https://www.tampermonkey.net/index.php?browser=chrome)进入 Chrome Web Store，安装稳定版 Tampermonkey。Brave 也可以安装这个商店版本。
 2. 在 `chrome://extensions` 或 `brave://extensions` 中找到 **Tampermonkey → 详情**，开启 **允许用户脚本 / Allow User Scripts**。Chrome 138+ 的 Chrome 系浏览器和 Tampermonkey 5.3+ 支持这种权限方式，全局“开发者模式”可以关闭，参考 [官方 FAQ](https://www.tampermonkey.net/faq.php?locale=en&q=Q209)。没有此开关时，请更新浏览器和 Tampermonkey。
@@ -15,7 +15,17 @@
 
 详细步骤见 [脚本安装说明](userscript/安装说明.md)。无需将本项目发布到 Chrome Web Store。
 
-## 使用
+## 安装方式 2：Hammerspoon（macOS）
+
+安装并运行 [Hammerspoon](https://www.hammerspoon.org/)，授予 macOS 辅助功能权限，在项目根目录运行 `python3 hammerspoon/install.py`，然后在 Hammerspoon 菜单中选择 **Reload Config**。
+
+安装程序会备份并保留原有 `init.lua`，追加独立模块。默认 **Control + Option + '** 翻译，**Control + Option + Shift + '** 在 12 秒内恢复原文；与油猴版使用不同快捷键，可同时安装。
+
+支持选区优先、无选区时处理当前实际行、按应用禁用及剪贴板保护。无法准确读取的编辑器提供译文预览或手动复制后翻译，不直接替换。具体软件的富文本格式与撤销行为仍需验证。
+
+详细步骤和限制见 [Hammerspoon 安装与使用说明](hammerspoon/README.md)。
+
+## 油猴版使用
 
 1. 点击网页文本输入框，输入中文，例如“机器学习”。
 2. 根据需要选中文字，完成中文输入法选词后，按住 **Ctrl**，再按英文键盘上的**单引号 `'` 键**。Mac 上使用 **Control**。
@@ -35,7 +45,7 @@
 
 翻译等待期间，若文本被修改、开始输入法组合输入、光标或选区改变、焦点移走、页面地址或网站启用状态改变，译文不会回填。恢复原文也不会覆盖之后的修改。
 
-## 支持范围
+## 油猴版支持范围
 
 - 普通 HTTP / HTTPS 网页中的 `input[type=text]`、`input[type=search]` 和 `textarea`，包括 Google、Google Scholar 及其他网站。
 - 动态创建的输入框及开放 Shadow DOM 中的上述输入框。
@@ -45,7 +55,7 @@
 
 在 Tampermonkey 图标菜单中选择 **在此网站禁用中文英译** 可立即禁用当前网站；之后可通过 **启用此网站的中文英译** 恢复。设置按完整主机名保存，同一网站的其他标签页会同步更新。
 
-## 翻译服务和隐私
+## 油猴版翻译服务和隐私
 
 - 使用 `https://translate.googleapis.com/translate_a/single` 的免 Key 在线接口，目标语言固定为英文。该接口没有稳定性保证，可能变更或限流。
 - 脚本在普通 HTTP / HTTPS 网站运行，只有在受支持的文本框内手动按快捷键时，才发送本次目标文本。单纯输入或选中文字不会上传。
@@ -54,7 +64,7 @@
 - 请求 12 秒超时，不自动重试。失败保留原文，可稍后再按快捷键。
 - 翻译服务可能改变引号、布尔运算符等搜索语法。可以只选中自然语言部分进行翻译；专业术语建议核对译文。
 
-## 常见问题
+## 油猴版常见问题
 
 - **按键无反应**：刷新网页，确认脚本启用、允许用户脚本已开启、输入法已完成选词，且光标位于支持的输入框。检查当前网站是否被禁用，以及快捷键是否与系统、输入法或其他脚本冲突。
 - **多行内容只翻译一行**：这是未选中文字时的行为。要翻译多行，请先选中需要处理的部分。
@@ -69,8 +79,11 @@
 ```sh
 npm run build
 npm test
+npm run test:hammerspoon
 ```
 
 `userscript/config.js` 定义选区与格式规则，`userscript/transport.js` 封装 Tampermonkey 请求，`userscript/content.js` 处理文本框和网站菜单。构建后生成可直接安装的单文件脚本，运行时无需第三方库或远程执行代码。
 
 可选浏览器检查使用 Playwright 和独立临时浏览器配置。通过 `PLAYWRIGHT_MODULE` 指定 Playwright 路径，`BROWSER_EXECUTABLE` 指定 Chrome 或 Brave 可执行文件，然后运行 `npm run test:browser`。检查使用网页夹具及模拟的 Tampermonkey API 和翻译响应，不涉及日常浏览器配置。覆盖范围和限制见 [验证记录](验证记录.md)。
+
+Hammerspoon 模块位于 `hammerspoon/keyword_translator.lua`，无需构建。Lua 检查优先使用系统 Lua 5.3+，或 Hammerspoon 自带 Lua 库；它使用模拟的系统接口，不代表所有应用已验证。
