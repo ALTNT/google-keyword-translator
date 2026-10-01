@@ -1,6 +1,6 @@
 -- Chinese -> English in the focused macOS text control. No configuration is
 -- changed on require(); call new(options):start() explicitly.
-local M = { version = "1.0.1" }
+local M = { version = "1.1.1" }
 local Text = {}
 M.text = Text
 
@@ -141,6 +141,76 @@ local function read(element, name)
   if ok then return value end
 end
 
+local function parameter(element, name, argument)
+  if not element or argument == nil then return nil end
+  local ok, value = pcall(element.parameterizedAttributeValue, element, name, argument)
+  if ok then return value end
+end
+
+local function selectedText(element)
+  local selected = read(element, "AXSelectedText")
+  if type(selected) == "string" and selected ~= "" then return selected end
+  return parameter(element, "AXStringForTextMarkerRange", read(element, "AXSelectedTextMarkerRange"))
+end
+
+local function protected(element)
+  return read(element, "AXSubrole") == "AXSecureTextField" or read(element, "AXProtectedContent") == true
+end
+
+local function selectionAnchor(api, element, range)
+  local rect = parameter(element, "AXBoundsForTextMarkerRange", read(element, "AXSelectedTextMarkerRange"))
+    or parameter(element, "AXBoundsForRange", range)
+  if type(rect) == "table" and type(rect.x) == "number" and type(rect.y) == "number"
+    and type(rect.w) == "number" and type(rect.h) == "number" then
+    return { x = rect.x, y = rect.y, w = rect.w, h = rect.h }
+  end
+  local point = api.mouse.absolutePosition()
+  return { x = point.x, y = point.y, w = 0, h = 0 }
+end
+
+function Text.previewFrame(anchor, screens)
+  local screen = screens[1]
+  local px, py = anchor.x + (anchor.w or 0) / 2, anchor.y + (anchor.h or 0) / 2
+  for _, frame in ipairs(screens) do
+    if px >= frame.x and px <= frame.x + frame.w and py >= frame.y and py <= frame.y + frame.h then
+      screen = frame; break
+    end
+  end
+  local width, height = math.min(480, screen.w - 24), math.min(300, screen.h - 24)
+  local x, y = anchor.x, anchor.y + (anchor.h or 0) + 10
+  if y + height > screen.y + screen.h - 12 then y = anchor.y - height - 10 end
+  return { x = math.max(screen.x + 12, math.min(x, screen.x + screen.w - width - 12)),
+    y = math.max(screen.y + 12, math.min(y, screen.y + screen.h - height - 12)), w = width, h = height }
+end
+
+function Text.previewHTML(text, hasOriginal)
+  local escaped = text:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
+  return [[<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<title>英文译文</title><style>
+:root{color-scheme:light dark;font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:13px}
+*{box-sizing:border-box}body{margin:0;padding:16px;height:100vh;display:flex;flex-direction:column;gap:10px;background:#f7f8fa;color:#20242a}
+label{font-size:15px;font-weight:600}p{margin:0;color:#636b76;font-size:12px}
+textarea{flex:1;min-height:70px;width:100%;resize:none;border:1px solid #cdd3dc;border-radius:8px;padding:12px;font:14px/1.55 -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#20242a}
+textarea:focus{outline:2px solid #4979db;outline-offset:1px}footer{display:flex;align-items:center;gap:8px;flex-wrap:wrap}#status{flex:1;min-width:0;color:#636b76;font-size:12px}
+button{flex-shrink:0;border:1px solid #cdd3dc;border-radius:7px;padding:7px 12px;background:#fff;color:inherit;font:inherit;cursor:pointer}button:disabled{opacity:.5;cursor:default}#copy{background:#3268cb;color:#fff;border-color:#3268cb}
+@media(prefers-color-scheme:dark){body{background:#202328;color:#eceff3}p,#status{color:#aeb5c0}textarea,button{background:#2b3037;color:#eceff3;border-color:#505866}}
+</style></head><body><label for="translation">译文</label><p>可直接修改；选中文字后按 Command + C 复制。</p>
+<textarea id="translation" aria-label="英文译文" spellcheck="false">
+]] .. escaped .. [[</textarea>
+<footer><span id="status" role="status"></span><button id="close" type="button">关闭</button><button id="copy-original" type="button" ]] .. (hasOriginal and "" or "disabled") .. [[>复制原文</button><button id="copy" type="button">复制译文</button></footer>
+<script>
+const editor=document.getElementById('translation');
+const send=(action)=>webkit.messageHandlers.keywordTranslatorPreview.postMessage({action,text:editor.value});
+document.getElementById('copy').addEventListener('click',()=>send('copy'));
+document.getElementById('copy-original').addEventListener('click',()=>send('copy-original'));
+document.getElementById('close').addEventListener('click',()=>send('close'));
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();send('close')}});
+editor.focus(); editor.setSelectionRange(0,0);
+</script></body></html>]]
+end
+
 local function setRange(element, range)
   local ok, result = pcall(element.setAttributeValue, element, "AXSelectedTextRange", range)
   return ok and result ~= nil and sameRange(read(element, "AXSelectedTextRange"), range)
@@ -185,22 +255,34 @@ function Controller:capture()
   local app = api.application.frontmostApplication()
   if not self:allowed(app) then return nil, "中文英译已暂停，或当前应用已禁用。" end
   local element = read(api.axuielement.systemWideElement(), "AXFocusedUIElement")
+  if not element then return nil, "无法读取选区。请先选中文字，或通过菜单翻译剪贴板。" end
+  -- Check ancestors before reading a selection from an outer document.
+  local current, ancestors = element, {}
+  for _ = 1, 8 do
+    if not current then break end
+    if protected(current) then return nil, "此文本框是受保护的输入框，未读取内容。" end
+    ancestors[#ancestors + 1] = current
+    current = read(current, "AXParent")
+  end
   local role = read(element, "AXRole")
-  if read(element, "AXSubrole") == "AXSecureTextField" or read(element, "AXProtectedContent") == true then
-    return nil, "此文本框是受保护的输入框，未读取内容。"
-  end
-  if not element or (role ~= "AXTextField" and role ~= "AXTextArea" and role ~= "AXComboBox")
-    or read(element, "AXEnabled") == false or read(element, "AXEditable") == false then
-    return nil, "未找到可编辑文本框。可手动复制文字，再通过菜单翻译剪贴板。"
-  end
   local value, selection = read(element, "AXValue"), read(element, "AXSelectedTextRange")
-  if type(value) ~= "string" or not validRange(selection) then
-    local selected = read(element, "AXSelectedText")
-    if type(selected) == "string" and selected ~= "" then
-      return { app = app, element = element, preview = true, original = selected,
-        selection = selection, target = { text = selected, scope = "选中文字" }, epoch = self.epoch }
+  local editable = (role == "AXTextField" or role == "AXTextArea" or role == "AXComboBox")
+    and read(element, "AXEnabled") ~= false and read(element, "AXEditable") ~= false
+  if editable and element.isAttributeSettable then
+    local ok, writable = pcall(element.isAttributeSettable, element, "AXValue")
+    if ok and writable == false then editable = false end
+  end
+  if not editable or type(value) ~= "string" or not validRange(selection) then
+    for _, owner in ipairs(ancestors) do
+      local selected = selectedText(owner)
+      if type(selected) == "string" and selected ~= "" then
+        local range = read(owner, "AXSelectedTextRange")
+        return { app = app, element = owner, focused = element, preview = true, original = selected,
+          selection = range, anchor = selectionAnchor(api, owner, range),
+          target = { text = selected, scope = "选中文字" }, epoch = self.epoch }
+      end
     end
-    return nil, "无法准确读取文本和光标。请选中文字，或手动复制后通过菜单翻译剪贴板。"
+    return nil, "未找到选中文字或可编辑文本框。请先选中文字，或通过菜单翻译剪贴板。"
   end
   local target, err = Text.target(value, selection)
   if not target then return nil, err end
@@ -215,9 +297,9 @@ function Controller:unchanged(snapshot)
   if snapshot.clipboard then return api.pasteboard.changeCount() == snapshot.clipboardCount end
   local app = api.application.frontmostApplication()
   if not app or app:pid() ~= snapshot.app:pid() then return false end
-  if read(api.axuielement.systemWideElement(), "AXFocusedUIElement") ~= snapshot.element then return false end
+  if read(api.axuielement.systemWideElement(), "AXFocusedUIElement") ~= (snapshot.focused or snapshot.element) then return false end
   if snapshot.preview then
-    return read(snapshot.element, "AXSelectedText") == snapshot.original
+    return selectedText(snapshot.element) == snapshot.original
       and ((snapshot.selection == nil and read(snapshot.element, "AXSelectedTextRange") == nil)
         or sameRange(read(snapshot.element, "AXSelectedTextRange"), snapshot.selection))
   end
@@ -271,6 +353,7 @@ function Controller:watch(snapshot)
 end
 
 function Controller:cancel()
+  self:closePreview()
   self.epoch = self.epoch + 1
   local job = self.job
   self.job = nil
@@ -299,12 +382,68 @@ function Controller:finish(job, message)
   if message then self:notice(message) end
 end
 
-function Controller:preview(text)
-  local choice = self.hs.dialog.blockAlert("英文译文（未替换原文）", text, "复制译文", "关闭")
-  if choice == "复制译文" then
-    if self.hs.pasteboard.setContents(text) then self:notice("译文已复制，请自行粘贴。")
-    else self:notice("无法写入剪贴板。") end
-  end
+function Controller:closePreview()
+  local view, bridge = self.previewView, self.previewBridge
+  self.previewView, self.previewBridge, self.previewFocused = nil, nil, false
+  if bridge then bridge:setCallback(nil) end
+  if view then view:windowCallback(nil); view:delete() end
+end
+
+function Controller:preview(text, snapshot)
+  self:closePreview()
+  local api = self.hs
+  -- Keep the captured source in Lua, independent of later edits or clipboard changes.
+  local original = snapshot and snapshot.target and snapshot.target.text
+  local hasOriginal = type(original) == "string" and original ~= ""
+  local anchor = snapshot and snapshot.anchor or selectionAnchor(api, nil, nil)
+  local screens = {}
+  for _, screen in ipairs(api.screen.allScreens()) do screens[#screens + 1] = screen:frame() end
+  if #screens == 0 then self:notice("无法定位译文窗口。"); return end
+  local bridge = api.webview.usercontent.new("keywordTranslatorPreview")
+  local view = api.webview.new(Text.previewFrame(anchor, screens),
+    { privateBrowsing = true, javaScriptCanOpenWindowsAutomatically = false }, bridge)
+  if not view then bridge:setCallback(nil); self:notice("无法创建译文窗口。"); return end
+  self.previewBridge, self.previewView = bridge, view
+  bridge:setCallback(function(message)
+    if self.previewView ~= view then return end
+    local body = type(message) == "table" and message.body
+    if type(body) ~= "table" then return end
+    if body.action == "close" then self:closePreview(); return end
+    if body.action == "copy-original" and hasOriginal then
+      local copied = api.pasteboard.setContents(original)
+      view:evaluateJavaScript("document.getElementById('status').textContent="
+        .. (copied and "'原文已复制'" or "'原文复制失败，请重试'"))
+      return
+    end
+    if body.action == "copy" and type(body.text) == "string" then
+      local copied = api.pasteboard.setContents(body.text)
+      view:evaluateJavaScript("document.getElementById('status').textContent="
+        .. (copied and "'已复制'" or "'复制失败，请用 Command + C 重试'"))
+    end
+  end)
+  view:windowStyle({ "titled", "closable", "resizable" }):windowTitle("英文译文")
+    :allowTextEntry(true):allowNewWindows(false):deleteOnClose(true):closeOnEscape(true)
+    :navigationCallback(function(action)
+      if action == "didFinishNavigation" and self.previewView == view then
+        view:show()
+        view:evaluateJavaScript("document.getElementById('translation').focus()")
+      end
+    end)
+    :windowCallback(function(action, _, state)
+      if action == "focusChange" and self.previewView == view then self.previewFocused = state end
+      if action == "closing" and self.previewView == view then
+        self.previewView, self.previewBridge, self.previewFocused = nil, nil, false
+        bridge:setCallback(nil)
+      end
+    end)
+    :html(Text.previewHTML(text, hasOriginal))
+  -- Activate the host before making this Cocoa window key. AX window focus can
+  -- select Hammerspoon's console instead of its WebKit popup.
+  local host = api.application.get("org.hammerspoon.Hammerspoon")
+  if host then host:activate() end
+  view:show():bringToFront()
+  self.status = "译文已显示，可编辑并复制。"
+  if self.menu then self.menu:setTooltip(self.status) end
 end
 
 function Controller:request(snapshot)
@@ -342,7 +481,7 @@ function Controller:request(snapshot)
     end
     if snapshot.preview or snapshot.clipboard then
       self:finish(job)
-      self:preview(translated)
+      self:preview(translated, snapshot)
     else
       self:replace(job, translated)
     end

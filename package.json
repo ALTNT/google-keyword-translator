@@ -1,6 +1,6 @@
 {
   "name": "google-keyword-translator",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "description": "Chinese-to-English text replacement with Tampermonkey and macOS Hammerspoon.",
   "scripts": {

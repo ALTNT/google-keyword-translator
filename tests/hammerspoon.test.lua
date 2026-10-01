@@ -28,7 +28,7 @@ local function fixture(value, location, length, options)
   local s = { now = 0, timers = {}, taps = {}, observers = {}, alerts = {}, requests = {},
     data = { ["public.utf8-plain-text"] = "previous clipboard", ["public.rtf"] = "old rich data" },
     clipCount = 1, items = 1, modifiers = {}, secure = false, permission = true, pastes = 0,
-    hotkeys = {}, settings = {}, previews = {}, previewChoice = "关闭" }
+    hotkeys = {}, settings = {}, previews = {}, views = {} }
   local attrs = { AXValue = value, AXRole = "AXTextArea", AXEnabled = true,
     AXSelectedTextRange = { location = location or 0, length = length or 0 } }
   s.attrs = attrs
@@ -36,6 +36,11 @@ local function fixture(value, location, length, options)
     name = function() return "Test Editor" end }
   s.front = s.app
   s.element = {
+    isAttributeSettable = function(_, name) if name == "AXValue" then return not s.readonly end; return not s.denyRange end,
+    parameterizedAttributeValue = function(_, name)
+      if name == "AXStringForTextMarkerRange" then return s.markerSelected end
+      if name == "AXBoundsForRange" or name == "AXBoundsForTextMarkerRange" then return clone(s.bounds) end
+    end,
     attributeValue = function(_, name)
       if name == "AXSelectedText" then
         if s.selectedOnly then return s.selectedOnly end
@@ -104,7 +109,7 @@ local function fixture(value, location, length, options)
     timer = { doAfter = function(delay, fn) return timer(delay, fn) end,
       doEvery = function(delay, fn) return timer(delay, fn, delay) end, secondsSinceEpoch = function() return s.now end },
     keycodes = { map = { ["'"] = 39 } },
-    application = { frontmostApplication = function() return s.front end },
+    application = { frontmostApplication = function() return s.front end, get = function() return {activate=function() s.hostActivated=true end} end },
     axuielement = {
       systemWideElement = function() return { attributeValue = function() return s.focus end } end,
       observer = { new = function()
@@ -173,7 +178,37 @@ local function fixture(value, location, length, options)
       return task
     end },
     json = { decode = function() if s.invalidJson then error("bad json") end; return s.responseData end },
-    dialog = { blockAlert = function(_, text) s.previews[#s.previews + 1] = text; return s.previewChoice end },
+    mouse = { absolutePosition = function() return {x=300,y=200} end },
+    screen = { allScreens = function() return { { frame = function() return {x=0,y=0,w=1200,h=800} end } } end },
+    webview = {
+      usercontent = { new = function(name)
+        local bridge = {name=name}
+        function bridge:setCallback(fn) self.fn=fn; return self end
+        return bridge
+      end },
+      new = function(frame, prefs, bridge)
+        local view = {frame=frame,prefs=prefs,bridge=bridge}
+        for _, name in ipairs({"windowStyle","windowTitle","allowTextEntry","allowNewWindows","deleteOnClose","closeOnEscape"}) do
+          view[name] = function(self, value) self[name .. "Value"] = value; return self end
+        end
+        function view:navigationCallback(fn) self.navigationFn=fn; return self end
+        function view:windowCallback(fn) self.windowFn=fn; return self end
+        function view:html(html)
+          self.document=html
+          local text=html:match('<textarea[^>]*>\n(.-)</textarea>'):gsub('&lt;','<'):gsub('&gt;','>'):gsub('&amp;','&')
+          s.previews[#s.previews+1]=text
+          return self
+        end
+        function view:show() self.shown=true; self.focused=true; if self.windowFn then self.windowFn("focusChange",self,true) end; return self end
+        function view:bringToFront() self.front=true; return self end
+        function view:hswindow() return {focus=function() self.focused=true end} end
+        function view:evaluateJavaScript(script) self.script=script; return self end
+        function view:delete() self.deleted=true; if self.windowFn then self.windowFn("closing",self) end end
+        function view:send(action,text) if self.bridge.fn then self.bridge.fn({body={action=action,text=text}}) end end
+        s.views[#s.views+1]=view
+        return view
+      end
+    },
     hotkey = { bind = function(mods, key, pressed, released)
       equal(pressed, nil)
       local keybind = { mods = mods, key = key, released = released }
@@ -396,7 +431,7 @@ test("only the translation hotkey is registered; application undo remains availa
   equal(s.controller.undo, nil)
 end)
 
-test("secure input, protected fields, read-only controls and terminal applications do not send requests", function()
+test("secure input, protected fields, unselected read-only controls and terminal applications do not send requests", function()
   for _, mode in ipairs({ "secure", "protected", "readonly", "terminal", "permission", "role" }) do
     local s = fixture("中文")
     if mode == "secure" then s.secure = true end
@@ -416,11 +451,116 @@ test("unverifiable selected text produces a preview and never writes into the do
 end)
 
 test("manual clipboard translation previews and copies only on explicit selection", function()
-  local s = fixture("unused"); s.clip("中文"); s.previewChoice = "复制译文"
+  local s = fixture("unused"); s.clip("中文")
   s.controller:translateClipboard(); s.respond("Chinese")
-  equal(s.previews[1], "Chinese"); equal(s.pastes, 0); equal(s.data["public.utf8-plain-text"], "Chinese")
+  equal(s.previews[1], "Chinese"); equal(s.pastes, 0)
+  equal(s.data["public.utf8-plain-text"], "中文")
+  s.views[1]:send("copy","Edited English")
+  equal(s.data["public.utf8-plain-text"], "Edited English")
+  s.views[1]:send("copy-original","spoofed source")
+  equal(s.data["public.utf8-plain-text"], "中文")
   local changed = fixture("unused"); changed.clip("中文"); changed.controller:translateClipboard()
   changed.clip("new copy"); changed.respond("Chinese"); equal(#changed.previews, 0)
+end)
+
+test("read-only webpage and textarea selections open an editable preview, never paste", function()
+  for _, role in ipairs({"AXWebArea","AXStaticText","AXTextArea"}) do
+    local s = fixture("前面机器学习后面",2,4); s.attrs.AXRole=role; s.readonly=true
+    s.controller:translate(); s.respond("Machine learning")
+    equal(s.previews[1],"Machine learning"); equal(s.pastes,0); equal(s.rangeWrites,nil)
+    equal(s.attrs.AXValue,"前面机器学习后面")
+    equal(s.data["public.utf8-plain-text"],"previous clipboard")
+    local view=s.views[1]
+    assert(view.shown and view.focused and view.allowTextEntryValue)
+    equal(view.allowNewWindowsValue,false); assert(view.prefs.privateBrowsing)
+    view:send("copy","Edited translation")
+    equal(s.data["public.utf8-plain-text"],"Edited translation")
+    view:send("copy-original","Edited translation")
+    equal(s.data["public.utf8-plain-text"],"机器学习")
+  end
+end)
+
+test("read-only selection can come from an ancestor or a native text marker", function()
+  for _, mode in ipairs({"ancestor","marker"}) do
+    local s=fixture("ignored"); s.attrs.AXRole="AXGroup"; s.attrs.AXSelectedTextRange=nil
+    if mode=="ancestor" then
+      local parent={attributeValue=function(_,name) if name=="AXSelectedText" then return "机器学习" end end}
+      s.attrs.AXParent=parent
+    else s.attrs.AXSelectedTextMarkerRange={id=1}; s.markerSelected="机器学习" end
+    s.controller:translate(); equal(#s.requests,1); s.respond("Machine learning")
+    equal(s.previews[1],"Machine learning"); equal(s.pastes,0)
+  end
+end)
+
+test("read-only previews still reject changed selections, focus, empty and English targets", function()
+  for _, mode in ipairs({"selection","focus","empty","english"}) do
+    local s=fixture(mode=="english" and "English" or "中文",0,mode=="empty" and 0 or 2)
+    s.attrs.AXRole="AXWebArea"
+    s.controller:translate()
+    if mode=="empty" or mode=="english" then equal(#s.requests,0)
+    else
+      if mode=="selection" then s.attrs.AXSelectedTextRange.length=1 else s.focus={} end
+      s.respond("Chinese"); equal(#s.views,0)
+    end
+    equal(s.pastes,0)
+  end
+end)
+
+test("protected ancestors are rejected before reading selected text", function()
+  local s=fixture("中文",0,2); s.attrs.AXRole="AXGroup"
+  s.attrs.AXParent={attributeValue=function(_,name) if name=="AXProtectedContent" then return true end end}
+  s.controller:translate(); equal(#s.requests,0)
+end)
+
+test("preview stays on its monitor, including negative coordinates and screen edges", function()
+  local screens={{x=0,y=0,w=1200,h=800},{x=-1000,y=0,w=1000,h=700}}
+  local frame=Text.previewFrame({x=-20,y=650,w=5,h=15},screens)
+  assert(frame.x>=-988 and frame.x+frame.w<=-12 and frame.y>=12 and frame.y+frame.h<=688)
+  frame=Text.previewFrame({x=1190,y=790,w=0,h=0},screens)
+  assert(frame.x>=12 and frame.x+frame.w<=1188 and frame.y>=12 and frame.y+frame.h<=788)
+end)
+
+test("translation text cannot inject executable markup into the preview", function()
+  local html=Text.previewHTML('</textarea><img src=x onerror="attack()"> & 🙂')
+  assert(html:find('&lt;/textarea&gt;&lt;img',1,true))
+  assert(not html:find('<img',1,true)); assert(html:find('&amp;',1,true))
+  assert(html:find("default-src 'none'",1,true))
+end)
+
+test("original copy preserves the captured source despite later edits and clipboard changes", function()
+  local s=fixture("unused")
+  local original=" \n中文🙂\r\n第二行\n "
+  local snapshot={target={text=original}}
+  s.controller:preview("English",snapshot)
+  snapshot.target.text="changed selection"; s.clip("new clipboard")
+  local view=s.views[1]
+  assert(view.document:find('id="copy-original" type="button" >',1,true))
+  view:send("copy-original","spoofed text")
+  equal(s.data["public.utf8-plain-text"],original)
+  assert(view.script:find("原文已复制",1,true))
+  equal(s.pastes,0)
+end)
+
+test("missing source and failed original copy leave the clipboard unchanged", function()
+  local s=fixture("unused"); s.controller:preview("English")
+  assert(s.views[1].document:find('id="copy-original" type="button" disabled',1,true))
+  s.views[1]:send("copy-original","unexpected")
+  equal(s.data["public.utf8-plain-text"],"previous clipboard")
+  s.controller:preview("English",{target={text="中文"}}); s.denyClipboard=true
+  s.views[2]:send("copy-original","unexpected")
+  equal(s.data["public.utf8-plain-text"],"previous clipboard")
+  assert(s.views[2].script:find("原文复制失败，请重试",1,true))
+end)
+
+test("closing, replacing and stopping previews release windows and stale copy callbacks", function()
+  local s=fixture("中文")
+  s.controller:preview("First",{target={text="旧原文"}}); local first=s.views[1]; local stale=first.bridge.fn
+  s.controller:preview("Second"); assert(first.deleted); equal(first.bridge.fn,nil)
+  stale({body={action="copy",text="stale"}}); equal(s.data["public.utf8-plain-text"],"previous clipboard")
+  stale({body={action="copy-original",text="stale"}}); equal(s.data["public.utf8-plain-text"],"previous clipboard")
+  s.views[2]:send("close"); assert(s.views[2].deleted); equal(s.controller.previewView,nil)
+  s.controller:preview("Third"); s.controller:stop(); assert(s.views[3].deleted)
+  equal(s.views[3].bridge.fn,nil); equal(s.controller.previewView,nil)
 end)
 
 test("disabling and re-enabling an application invalidates its outstanding request and persists only identifiers", function()
