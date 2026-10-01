@@ -1,0 +1,67 @@
+{
+  "manifest_version": 3,
+  "name": "搜索关键词英译 · Google / Scholar",
+  "version": "1.0.0",
+  "description": "在 Google 或 Google Scholar 搜索框按 Ctrl + 单引号，将中文关键词翻译为英文。",
+  "minimum_chrome_version": "109",
+  "host_permissions": [
+    "https://translate.googleapis.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://google.com/*",
+        "https://www.google.com/*",
+        "https://scholar.google.com/*",
+        "https://google.com.hk/*",
+        "https://www.google.com.hk/*",
+        "https://scholar.google.com.hk/*",
+        "https://google.com.tw/*",
+        "https://www.google.com.tw/*",
+        "https://scholar.google.com.tw/*",
+        "https://google.cn/*",
+        "https://www.google.cn/*",
+        "https://scholar.google.cn/*",
+        "https://google.co.uk/*",
+        "https://www.google.co.uk/*",
+        "https://scholar.google.co.uk/*",
+        "https://google.ca/*",
+        "https://www.google.ca/*",
+        "https://scholar.google.ca/*",
+        "https://google.com.au/*",
+        "https://www.google.com.au/*",
+        "https://scholar.google.com.au/*",
+        "https://google.co.jp/*",
+        "https://www.google.co.jp/*",
+        "https://scholar.google.co.jp/*",
+        "https://google.co.kr/*",
+        "https://www.google.co.kr/*",
+        "https://scholar.google.co.kr/*",
+        "https://google.de/*",
+        "https://www.google.de/*",
+        "https://scholar.google.de/*",
+        "https://google.fr/*",
+        "https://www.google.fr/*",
+        "https://scholar.google.fr/*",
+        "https://google.co.in/*",
+        "https://www.google.co.in/*",
+        "https://scholar.google.co.in/*",
+        "https://google.com.sg/*",
+        "https://www.google.com.sg/*",
+        "https://scholar.google.com.sg/*"
+      ],
+      "js": [
+        "shared.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "搜索关键词英译（Ctrl + '）"
+  }
+}
