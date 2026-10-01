@@ -28,3 +28,29 @@ test("Hammerspoon installation preserves existing config, backs it up and is ide
     assert.deepEqual(fs.readdirSync(dir), files);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("upgrade removes retired undo options, retaining custom translation keys and unrelated CRLF config", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "keyword-translator-upgrade-"));
+  try {
+    const prefix = 'require("existing_module")\r\n';
+    const suffix = 'require("another_module")\r\n';
+    const block = '-- BEGIN keyword-translator (managed installation)\r\n'
+      + 'keywordTranslator = require("keyword_translator").new({\r\n'
+      + '    translateModifiers = {"ctrl"},\r\n    translateKey = "t",\r\n'
+      + '    undoModifiers = {"ctrl", "shift"},\r\n    undoKey = "t",\r\n'
+      + '}):start()\r\n-- END keyword-translator (managed installation)\r\n';
+    const original = prefix + block + suffix;
+    fs.writeFileSync(path.join(dir, "init.lua"), original);
+    const run = () => spawnSync(process.env.PYTHON_EXECUTABLE || "python3",
+      [fileURLToPath(installer), "--directory", dir], { encoding: "utf8" });
+    assert.equal(run().status, 0);
+    const config = fs.readFileSync(path.join(dir, "init.lua"), "utf8");
+    assert.equal(config, original.replace(/^    undo[^\r\n]*\r\n/gm, ""));
+    assert.ok(config.startsWith(prefix) && config.endsWith(suffix));
+    const files = fs.readdirSync(dir);
+    assert.equal(fs.readFileSync(path.join(dir, files.find(f => f.startsWith("init.lua.backup-"))), "utf8"), original);
+    assert.equal(run().status, 0);
+    assert.deepEqual(fs.readdirSync(dir), files);
+    assert.equal(fs.readFileSync(path.join(dir, "init.lua"), "utf8"), config);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

@@ -46,9 +46,15 @@ local function fixture(value, location, length, options)
       return clone(attrs[name])
     end,
     setAttributeValue = function(self, name, nextValue)
+      s.rangeWrites = (s.rangeWrites or 0) + 1
       if s.denyRange then return nil, "unsupported" end
-      attrs[name] = clone(nextValue)
-      if s.clamp then attrs[name].location = 0 end
+      if s.ignoreRange then return self end
+      local function apply()
+        attrs[name] = clone(nextValue)
+        if s.clamp then attrs[name].location = 0 end
+        s.notify("AXSelectedTextChanged")
+      end
+      if s.rangeDelay then s.api.timer.doAfter(s.rangeDelay, apply) else apply() end
       return self
     end
   }
@@ -79,8 +85,8 @@ local function fixture(value, location, length, options)
     local taps = {}; for _, tap in ipairs(s.taps) do taps[#taps + 1] = tap end
     for _, tap in ipairs(taps) do if tap.active then tap.fn(event) end end
   end
-  function s.notify()
-    for _, observer in ipairs(s.observers) do if observer.active and observer.fn then observer.fn() end end
+  function s.notify(notification)
+    for _, observer in ipairs(s.observers) do if observer.active and observer.fn then observer.fn(observer, s.element, notification) end end
   end
   function s.clip(text)
     s.data = { ["public.utf8-plain-text"] = text }; s.clipCount = s.clipCount + 1
@@ -121,10 +127,11 @@ local function fixture(value, location, length, options)
         s.taps[#s.taps + 1] = tap; return tap
       end,
       event = { types = types, properties = { eventSourceUserData = "userData" },
-        newKeyEvent = function(_, key, down)
+        newKeyEvent = function(mods, key, down)
           local event = {}
           function event:setProperty() self.own = true; return self end
           function event:post()
+            if not down then equal(#mods, 0) end
             if down then
               s.emit(types.keyDown, { cmd = true }, 9, self.own)
               equal(key, "v"); s.pastes = s.pastes + 1
@@ -213,30 +220,24 @@ test("formatting preserves Unicode whitespace, indentation, blank lines and mixe
   assert(not Text.format("中文\n\n中文", "Chinese\nadded\nChinese"))
 end)
 
-test("partial selection preserves surrounding search syntax and supports restoring the original selection", function()
+test("partial selection preserves surrounding search syntax and clipboard formats", function()
   local s = fixture("site:example.com 机器学习 AND AI", 17, 4)
   s.controller:translate(); s.respond("Machine learning"); s.advance(0.4)
   equal(s.attrs.AXValue, "site:example.com Machine learning AND AI")
   equal(s.data["public.utf8-plain-text"], "previous clipboard"); equal(s.data["public.rtf"], "old rich data")
-  s.controller:undo(); s.advance(0.4)
-  equal(s.attrs.AXValue, "site:example.com 机器学习 AND AI")
-  equal(s.attrs.AXSelectedTextRange.location, 17); equal(s.attrs.AXSelectedTextRange.length, 4)
 end)
 
-test("current line replacement and undo preserve other lines and indentation", function()
+test("current line replacement preserves other lines and indentation", function()
   local original = "Keep\n  机器学习  \nKeep too"
   local s = fixture(original, 8, 0)
   s.controller:translate(); s.respond("Machine learning"); s.advance(0.4)
   equal(s.attrs.AXValue, "Keep\n  Machine learning  \nKeep too")
-  s.controller:undo(); s.advance(0.4)
-  equal(s.attrs.AXValue, original); equal(s.attrs.AXSelectedTextRange.location, 8)
 end)
 
 test("multi-line selected text preserves blank lines and Unicode surrounding content", function()
   local s = fixture("🙂机器学习\n\n人工智能尾", 2, 10)
   s.controller:translate(); s.respond("Machine learning\n\nAI"); s.advance(0.4)
   equal(s.attrs.AXValue, "🙂Machine learning\n\nAI尾")
-  s.controller:undo(); s.advance(0.4); equal(s.attrs.AXValue, "🙂机器学习\n\n人工智能尾")
 end)
 
 test("empty and English lines do not fall back to the entire field", function()
@@ -328,10 +329,45 @@ test("empty clipboard is restored and multi-item clipboard is left untouched", f
   equal(multi.data["public.rtf"], "old rich data"); equal(multi.attrs.AXValue, "中文")
 end)
 
-test("unsupported range, clamped range, and clipboard failures never paste", function()
-  for _, flag in ipairs({ "denyRange", "clamp", "denyClipboard" }) do
-    local s = fixture("前中文后", 1, 2); s[flag] = true
-    s.controller:translate(); s.respond("Chinese"); equal(s.pastes, 0); equal(s.attrs.AXValue, "前中文后")
+test("a manually selected range does not require writable AX selection", function()
+  local s = fixture("前中文后", 1, 2); s.denyRange = true
+  s.controller:translate(); s.respond("Chinese"); s.advance(0.4)
+  equal(s.attrs.AXValue, "前Chinese后"); equal(s.rangeWrites, nil)
+end)
+
+test("asynchronous AX range writes are verified before pasting", function()
+  local s = fixture("Keep\n  机器学习  \nKeep too", 8, 0); s.rangeDelay = 0.1
+  s.controller:translate(); s.respond("Machine learning")
+  equal(s.pastes, 0); equal(s.data["public.utf8-plain-text"], "previous clipboard")
+  s.advance(0.5); equal(s.pastes, 1)
+  equal(s.attrs.AXValue, "Keep\n  Machine learning  \nKeep too")
+  equal(s.data["public.rtf"], "old rich data")
+end)
+
+test("rejected, clamped and ignored range writes do not paste", function()
+  for _, flag in ipairs({ "denyRange", "clamp", "ignoreRange", "denyClipboard" }) do
+    local s = fixture("Keep\n中文\nTail", 6, 0); s[flag] = true
+    s.controller:translate(); s.respond("Chinese"); s.advance(1)
+    equal(s.pastes, 0); equal(s.attrs.AXValue, "Keep\n中文\nTail")
+    equal(s.data["public.utf8-plain-text"], "previous clipboard")
+    equal(s.controller.job, nil)
+  end
+end)
+
+test("input, focus, text, clipboard and modifier changes during selection wait prevent paste", function()
+  for _, mode in ipairs({ "input", "focus", "text", "clipboard", "modifier", "stop", "selection", "reverted" }) do
+    local s = fixture("中文", 1, 0); s.rangeDelay = 0.1
+    s.controller:translate(); s.respond("Chinese")
+    if mode == "input" then s.emit(1) end
+    if mode == "focus" then s.focus = {} end
+    if mode == "text" then s.attrs.AXValue = "Later" end
+    if mode == "clipboard" then s.clip("New clipboard") end
+    if mode == "modifier" then s.modifiers.ctrl = true end
+    if mode == "stop" then s.controller:stop() end
+    if mode == "selection" then s.attrs.AXSelectedTextRange = {location=0,length=0}; s.notify("AXSelectedTextChanged") end
+    if mode == "reverted" then s.attrs.AXValue="Later"; s.notify("AXValueChanged"); s.attrs.AXValue="中文" end
+    s.advance(1); equal(s.pastes, 0)
+    equal(s.data["public.utf8-plain-text"], mode == "clipboard" and "New clipboard" or "previous clipboard")
   end
 end)
 
@@ -345,27 +381,19 @@ test("a concurrent clipboard change or incomplete backup aborts before changing 
   end
 end)
 
-test("an unaccepted paste is not retried and cannot create an undo record", function()
+test("an unaccepted paste is not retried and restores the clipboard", function()
   local s = fixture("中文"); s.rejectPaste = true
   s.controller:translate(); s.respond("Chinese"); s.advance(1)
-  equal(s.pastes, 1); equal(s.controller.undoRecord, nil)
+  equal(s.pastes, 1)
   equal(s.data["public.utf8-plain-text"], "previous clipboard")
 end)
 
-test("undo expires and never overwrites later edits", function()
-  for _, mode in ipairs({ "time", "input", "programmatic" }) do
-    local s = fixture("中文"); s.controller:translate(); s.respond("Chinese"); s.advance(0.4)
-    if mode == "time" then s.advance(13) end
-    if mode == "input" then s.emit(1) end
-    if mode == "programmatic" then s.attrs.AXValue = "later" end
-    s.controller:undo(); s.advance(0.4); equal(s.pastes, 1)
-  end
-end)
-
-test("the restore shortcut itself does not invalidate its undo record", function()
-  local s = fixture("中文"); s.controller:translate(); s.respond("Chinese"); s.advance(0.4)
-  s.emit(1, { ctrl = true, alt = true, shift = true }, 39)
-  s.hotkeys[2].released(); s.advance(0.4); equal(s.attrs.AXValue, "中文")
+test("only the translation hotkey is registered; application undo remains available", function()
+  local s = fixture("中文")
+  equal(#s.hotkeys, 1)
+  equal(s.hotkeys[1].key, "'")
+  equal(s.hotkeys[1].mods[1], "ctrl"); equal(s.hotkeys[1].mods[2], "alt")
+  equal(s.controller.undo, nil)
 end)
 
 test("secure input, protected fields, read-only controls and terminal applications do not send requests", function()
@@ -410,7 +438,7 @@ test("stopping cancels requests, releases hotkeys, and finishes clipboard cleanu
   pending.callback(0, "json\n200"); equal(s.pastes, 0)
   local pasted = fixture("中文"); pasted.controller:translate(); pasted.respond("Chinese")
   pasted.controller:stop(); pasted.advance(0.4)
-  equal(pasted.data["public.utf8-plain-text"], "previous clipboard"); equal(pasted.controller.undoRecord, nil)
+  equal(pasted.data["public.utf8-plain-text"], "previous clipboard")
 end)
 
 test("unsupported input monitoring prevents translation requests instead of weakening guards", function()

@@ -1,6 +1,6 @@
 -- Chinese -> English in the focused macOS text control. No configuration is
 -- changed on require(); call new(options):start() explicitly.
-local M = { version = "1.0.0" }
+local M = { version = "1.0.1" }
 local Text = {}
 M.text = Text
 
@@ -156,8 +156,6 @@ function M.new(options, api)
     hs = api or hs, options = options, enabled = true, running = false,
     translateModifiers = options.translateModifiers or { "ctrl", "alt" },
     translateKey = options.translateKey or "'",
-    undoModifiers = options.undoModifiers or { "ctrl", "alt", "shift" },
-    undoKey = options.undoKey or "'",
     disabledApps = {}, epoch = 0
   }, Controller)
   assert(self.hs, "This module requires Hammerspoon")
@@ -223,8 +221,10 @@ function Controller:unchanged(snapshot)
       and ((snapshot.selection == nil and read(snapshot.element, "AXSelectedTextRange") == nil)
         or sameRange(read(snapshot.element, "AXSelectedTextRange"), snapshot.selection))
   end
+  local selection = read(snapshot.element, "AXSelectedTextRange")
   return read(snapshot.element, "AXValue") == snapshot.original
-    and sameRange(read(snapshot.element, "AXSelectedTextRange"), snapshot.selection)
+    and (sameRange(selection, snapshot.selection)
+      or (snapshot.selecting and sameRange(selection, snapshot.target)))
 end
 
 function Controller:clearWatch(snapshot)
@@ -233,27 +233,15 @@ function Controller:clearWatch(snapshot)
   snapshot.poll, snapshot.tap, snapshot.observer = nil, nil, nil
 end
 
-function Controller:isUndoEvent(event)
-  if event:getKeyCode() ~= self.hs.keycodes.map[self.undoKey] then return false end
-  local flags, expected = event:getFlags(), {}
-  for _, mod in ipairs(self.undoModifiers) do expected[mod] = true end
-  for _, mod in ipairs({ "ctrl", "alt", "cmd", "shift" }) do
-    if not not flags[mod] ~= not not expected[mod] then return false end
-  end
-  return true
-end
-
-function Controller:watch(snapshot, undo)
+function Controller:watch(snapshot)
   local api = self.hs
   local types, props = api.eventtap.event.types, api.eventtap.event.properties
   local function invalidate()
     snapshot.dirty = true
-    if undo then self:clearUndo() end
   end
   snapshot.tap = api.eventtap.new({ types.keyDown, types.leftMouseDown, types.rightMouseDown,
     types.otherMouseDown, types.leftMouseDragged, types.scrollWheel }, function(event)
     if event:getProperty(props.eventSourceUserData) == marker then return false end
-    if undo and event:getType() == types.keyDown and self:isUndoEvent(event) then return false end
     invalidate()
     return false
   end):start()
@@ -268,7 +256,10 @@ function Controller:watch(snapshot, undo)
     local ok, observer = pcall(api.axuielement.observer.new, snapshot.app:pid())
     if ok then
       snapshot.observer = observer
-      observer:callback(function() invalidate() end)
+      observer:callback(function(_, _, notification)
+        if snapshot.selecting and notification == "AXSelectedTextChanged" and self:unchanged(snapshot) then return end
+        invalidate()
+      end)
       local registered = false
       for _, name in ipairs({ "AXValueChanged", "AXSelectedTextChanged" }) do
         if pcall(observer.addWatcher, observer, snapshot.element, name) then registered = true end
@@ -277,14 +268,6 @@ function Controller:watch(snapshot, undo)
     end
   end
   return true
-end
-
-function Controller:clearUndo()
-  if self.undoRecord then
-    self:clearWatch(self.undoRecord)
-    stop(self.undoRecord.expiry)
-  end
-  self.undoRecord = nil
 end
 
 function Controller:cancel()
@@ -296,7 +279,6 @@ function Controller:cancel()
     stop(job.timeout); stop(job.waitTimer)
     if job.task then pcall(job.task.terminate, job.task) end
   end
-  self:clearUndo()
   -- A paste already dispatched must retain its clipboard until its verification
   -- timer fires; that timer also restores the clipboard after stop()/pause().
 end
@@ -329,10 +311,9 @@ function Controller:request(snapshot)
   local api = self.hs
   local err = validateTarget(snapshot.target.text)
   if err then self:notice(err); return end
-  self:clearUndo()
   local job = { snapshot = snapshot }
   self.job = job
-  if not self:watch(snapshot) then self:finish(job, "无法监听输入变化，请检查辅助功能权限。"); return end
+  if not self:watch(snapshot) then self:finish(job, "无法启动输入监听，未请求翻译。请查看 Hammerspoon Console 中的错误。"); return end
   self:notice("正在翻译" .. snapshot.target.scope .. "…")
   local _, source = Text.trimParts(snapshot.target.text)
   local encoded = source:gsub("([^%w%-_%.~])", function(c) return string.format("%%%02X", string.byte(c)) end)
@@ -404,7 +385,34 @@ function Controller:waitForModifiers(job, callback)
   check()
 end
 
-function Controller:replace(job, translated, undo)
+-- Chromium accepts an AX write before its renderer updates the readable range.
+-- While waiting, only the original and requested ranges are accepted. Input,
+-- value and focus monitors remain active; our own range notification is ignored.
+function Controller:selectTarget(job, callback)
+  local api, snapshot = self.hs, job.snapshot
+  local desired = { location = snapshot.target.location, length = snapshot.target.length }
+  if sameRange(read(snapshot.element, "AXSelectedTextRange"), desired) then callback(); return end
+  snapshot.selecting = true
+  local ok, result = pcall(snapshot.element.setAttributeValue, snapshot.element, "AXSelectedTextRange", desired)
+  if not ok or not result then
+    self:finish(job, "此应用不支持设置选区，请先选中文字再翻译。"); return
+  end
+  local deadline = api.timer.secondsSinceEpoch() + 0.6
+  local function check()
+    if self.job ~= job then return end
+    if not self:unchanged(snapshot) then
+      self:finish(job, "设置选区期间输入或焦点已改变，未粘贴。"); return
+    end
+    if sameRange(read(snapshot.element, "AXSelectedTextRange"), desired) then callback(); return end
+    if api.timer.secondsSinceEpoch() >= deadline then
+      self:finish(job, "无法确认目标选区，请先选中文字再翻译；未粘贴。"); return
+    end
+    job.waitTimer = api.timer.doAfter(0.02, check)
+  end
+  check()
+end
+
+function Controller:replace(job, translated)
   self:waitForModifiers(job, function()
     local api, snapshot = self.hs, job.snapshot
     local target = snapshot.target
@@ -422,83 +430,55 @@ function Controller:replace(job, translated, undo)
     for _, uti in ipairs(items[1] or {}) do
       if saved[uti] == nil then self:finish(job, "无法完整备份剪贴板，未替换。"); return end
     end
-    self:clearWatch(snapshot)
-    if not setRange(snapshot.element, { location = target.location, length = target.length }) then
-      setRange(snapshot.element, snapshot.selection)
-      self:finish(job, "此应用不支持准确设置选区，未替换。"); return
-    end
-    if read(snapshot.element, "AXValue") ~= snapshot.original or api.pasteboard.changeCount() ~= count then
-      setRange(snapshot.element, snapshot.selection)
-      self:finish(job, "文本或剪贴板已改变，未替换。"); return
-    end
-    if not api.pasteboard.setContents(translated) then
-      setRange(snapshot.element, snapshot.selection)
-      self:finish(job, "无法写入剪贴板，未替换。"); return
-    end
-    local writtenCount = api.pasteboard.changeCount()
-    local function restoreClipboard()
-      if api.pasteboard.changeCount() == writtenCount then
-        if next(saved) == nil then api.pasteboard.clearContents() else api.pasteboard.writeAllData(saved) end
+    self:selectTarget(job, function()
+      self:clearWatch(snapshot)
+      if read(snapshot.element, "AXValue") ~= snapshot.original or api.pasteboard.changeCount() ~= count then
+        setRange(snapshot.element, snapshot.selection)
+        self:finish(job, "文本或剪贴板已改变，未替换。"); return
       end
-    end
-    -- Check focus again after the potentially expensive clipboard backup.
-    local current = api.application.frontmostApplication()
-    if not current or current:pid() ~= snapshot.app:pid()
-      or read(api.axuielement.systemWideElement(), "AXFocusedUIElement") ~= snapshot.element
-      or not self:allowed(snapshot.app) or snapshot.epoch ~= self.epoch
-      or api.eventtap.isSecureInputEnabled()
-      or read(snapshot.element, "AXValue") ~= snapshot.original
-      or not sameRange(read(snapshot.element, "AXSelectedTextRange"), target)
-      or api.pasteboard.changeCount() ~= writtenCount then
-      restoreClipboard(); self:finish(job, "焦点已改变，未粘贴。"); return
-    end
-    self.pasting = true
-    local posted = pcall(function()
-      for _, down in ipairs({ true, false }) do
-        api.eventtap.event.newKeyEvent({ "cmd" }, "v", down)
-          :setProperty(api.eventtap.event.properties.eventSourceUserData, marker):post()
+      if not api.pasteboard.setContents(translated) then
+        setRange(snapshot.element, snapshot.selection)
+        self:finish(job, "无法写入剪贴板，未替换。"); return
       end
-    end)
-    -- No retry: an application may accept a paste asynchronously.
-    job.verifyTimer = api.timer.doAfter(0.35, function()
-      restoreClipboard()
-      self.pasting = false
-      if self.job ~= job then return end
-      if not posted or read(snapshot.element, "AXValue") ~= newValue then
-        self:finish(job, "无法确认粘贴结果，请检查输入框；未重复粘贴。"); return
+      local writtenCount = api.pasteboard.changeCount()
+      local function restoreClipboard()
+        if api.pasteboard.changeCount() == writtenCount then
+          if next(saved) == nil then api.pasteboard.clearContents() else api.pasteboard.writeAllData(saved) end
+        end
       end
-      local originalSelection = undo and undo.selection or nil
-      if originalSelection then setRange(snapshot.element, originalSelection) end
-      local selected = read(snapshot.element, "AXSelectedTextRange")
-      self:finish(job)
-      if undo then self:notice("已恢复原文。"); return end
-      local record = { app = snapshot.app, element = snapshot.element, original = newValue,
-        selection = selected, epoch = self.epoch,
-        restoreSelection = snapshot.selection, restoreText = target.text,
-        target = { location = target.location, length = Text.length(translated),
-          startByte = target.startByte, endByte = target.startByte + #translated, text = translated } }
-      if validRange(selected) and self:watch(record, true) then
-        self.undoRecord = record
-        record.expiry = api.timer.doAfter(12, function() if self.undoRecord == record then self:clearUndo() end end)
-        self:notice("已翻译为英文，12 秒内可按恢复快捷键撤回。")
-      else self:notice("已翻译为英文。此应用未提供可验证的恢复状态。") end
+      -- Check focus again after the potentially expensive clipboard backup.
+      local flags = api.eventtap.checkKeyboardModifiers()
+      local current = api.application.frontmostApplication()
+      if flags.ctrl or flags.alt or flags.shift or flags.cmd or snapshot.dirty
+        or not current or current:pid() ~= snapshot.app:pid()
+        or read(api.axuielement.systemWideElement(), "AXFocusedUIElement") ~= snapshot.element
+        or not self:allowed(snapshot.app) or snapshot.epoch ~= self.epoch
+        or api.eventtap.isSecureInputEnabled()
+        or read(snapshot.element, "AXValue") ~= snapshot.original
+        or not sameRange(read(snapshot.element, "AXSelectedTextRange"), target)
+        or api.pasteboard.changeCount() ~= writtenCount then
+        restoreClipboard(); self:finish(job, "焦点已改变，未粘贴。"); return
+      end
+      self.pasting = true
+      local posted = pcall(function()
+        for _, down in ipairs({ true, false }) do
+          api.eventtap.event.newKeyEvent(down and { "cmd" } or {}, "v", down)
+            :setProperty(api.eventtap.event.properties.eventSourceUserData, marker):post()
+        end
+      end)
+      -- No retry: an application may accept a paste asynchronously.
+      job.verifyTimer = api.timer.doAfter(0.35, function()
+        restoreClipboard()
+        self.pasting = false
+        if self.job ~= job then return end
+        if not posted or read(snapshot.element, "AXValue") ~= newValue then
+          self:finish(job, "无法确认粘贴结果，请检查输入框；未重复粘贴。"); return
+        end
+        self:finish(job)
+        self:notice("已翻译为英文，可用 Command + Z 撤销。")
+      end)
     end)
   end)
-end
-
-function Controller:undo()
-  if self.job or self.pasting then self:notice("正在处理，请稍候。"); return end
-  local record = self.undoRecord
-  if not record or not self:unchanged(record) then
-    self:clearUndo(); self:notice("没有可恢复的原文，或输入状态已经改变。"); return
-  end
-  self:clearWatch(record); stop(record.expiry); self.undoRecord = nil
-  local job = { snapshot = record }
-  self.job = job
-  -- Restore only the region that was replaced, through the application's paste
-  -- operation; never assign AXValue to rewrite an entire document.
-  if not self:watch(record) then self:finish(job, "无法监听输入变化，未恢复。"); return end
-  self:replace(job, record.restoreText, { selection = record.restoreSelection })
 end
 
 function Controller:toggleApplication(app)
@@ -520,8 +500,7 @@ function Controller:start()
   if self.running then return self end
   self.running = true
   self.translateHotkey = self.hs.hotkey.bind(self.translateModifiers, self.translateKey, nil, function() self:translate() end)
-  self.undoHotkey = self.hs.hotkey.bind(self.undoModifiers, self.undoKey, nil, function() self:undo() end)
-  if not self.translateHotkey or not self.undoHotkey then
+  if not self.translateHotkey then
     self:stop(); self:notice("无法注册快捷键，请修改配置或检查快捷键冲突。"); return self
   end
   self.menu = self.hs.menubar.new()
@@ -550,9 +529,8 @@ function Controller:stop()
   self:cancel()
   self.running = false
   if self.translateHotkey then self.translateHotkey:delete() end
-  if self.undoHotkey then self.undoHotkey:delete() end
   if self.menu then self.menu:delete() end
-  self.translateHotkey, self.undoHotkey, self.menu = nil, nil, nil
+  self.translateHotkey, self.menu = nil, nil
   return self
 end
 

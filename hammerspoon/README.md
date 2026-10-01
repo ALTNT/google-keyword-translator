@@ -5,14 +5,14 @@
 ## 安装
 
 1. 安装并运行 [Hammerspoon](https://www.hammerspoon.org/)。
-2. 在 macOS 系统设置中，为 Hammerspoon 开启**辅助功能**权限。不同系统版本的名称可能不同，请按 Hammerspoon 的权限提示进入对应设置；授权后必要时重启 Hammerspoon。
+2. 在 Hammerspoon Preferences 中检查 **Accessibility** 状态。若显示 **Accessibility is enabled. You’re all set!**，已获授权，无需重复开启；尚未授权时，再按提示进入 macOS 系统设置开启**辅助功能**权限。
 3. 在项目根目录运行：
 
 ```sh
 python3 hammerspoon/install.py
 ```
 
-安装程序将独立模块复制到 `~/.hammerspoon/keyword_translator.lua`，并在 `~/.hammerspoon/init.lua` 末尾追加加载代码。已有配置保留，发生替换时创建带时间戳的备份。重复运行不会重复追加，也不会覆盖加载块里已修改的快捷键。可以用 `--directory /你的配置目录` 指定其他配置目录。
+安装程序将独立模块复制到 `~/.hammerspoon/keyword_translator.lua`，并在 `~/.hammerspoon/init.lua` 末尾追加加载代码。已有配置保留，发生替换时创建带时间戳的备份。重复运行不会重复追加，也不会覆盖加载块里已修改的翻译快捷键。升级时会移除加载块中旧的 `undoModifiers` 和 `undoKey` 配置。可以用 `--directory /你的配置目录` 指定其他配置目录。
 
 4. 在 Hammerspoon 菜单中选择 **Reload Config**。菜单栏出现 **中→EN** 即表示模块已加载。
 
@@ -29,14 +29,14 @@ keywordTranslator = require("keyword_translator").new():start()
 | 操作 | 默认快捷键 |
 | --- | --- |
 | 翻译并替换 | **Control + Option + '** |
-| 恢复原文 | **Control + Option + Shift + '** |
+| 撤销替换 | 目标软件的 **Command + Z** |
 
 输入法完成选词后再操作。按完快捷键请松开修饰键；超过 2 秒仍未松开时，本次替换取消。
 
 - **有选区：**翻译并替换选中部分，支持跨行。
 - **无选区：**翻译光标所在的实际行，以实际换行符分隔。自动折行仍算一行；单行输入框会处理整框内容。
 - **空白或不含中文：**不请求翻译，也不回退为翻译整个文本框。
-- **恢复原文：**成功替换后 12 秒内，将焦点保留在原文本框，按恢复快捷键。之后修改文字、移动选区、点击或滚动、切换焦点等操作会使恢复记录失效。
+- **撤销：**使用当前软件的 **Command + Z**。模块不注册额外恢复快捷键，也不设置 12 秒恢复期限；撤销记录由目标软件管理。
 
 保留选区外内容、换行、空行、缩进和首尾空白。待翻译部分最多 2000 个 UTF-16 单元，与油猴版的字符计数方式一致；emoji 一般占两个单元。译文分行结构不一致或仍含中文时保留原文。
 
@@ -54,8 +54,6 @@ keywordTranslator = require("keyword_translator").new():start()
 keywordTranslator = require("keyword_translator").new({
     translateModifiers = {"ctrl"},
     translateKey = "'",
-    undoModifiers = {"ctrl", "shift"},
-    undoKey = "'",
 }):start()
 ```
 
@@ -69,7 +67,7 @@ keywordTranslator = require("keyword_translator").new({
 
 对于完全无法读取的编辑器，可以先手动复制需要翻译的文字，再点击菜单栏 **中→EN → 翻译剪贴板（仅预览）**。这项操作不自动粘贴，也不猜测当前行。
 
-自定义富文本、聊天、文档编辑器，终端、远程桌面等不能保证通用。终端 Terminal 和 iTerm2 默认跳过，密码及可识别的受保护控件、安全输入状态也会排除。不支持准确设置选区或无法确认粘贴结果时会提示，不重复粘贴。
+自定义富文本、聊天、文档编辑器，终端、远程桌面等不能保证通用。终端 Terminal 和 iTerm2 默认跳过，密码及可识别的受保护控件、安全输入状态也会排除。设置选区后最多等待 0.6 秒，核对读取到的范围再粘贴，兼容 Chromium 延迟更新选区的情况。已有选区正确时直接使用，不重复设置。无法确认选区或粘贴结果时会提示，不重复粘贴。
 
 ## 菜单与隐私
 
@@ -85,7 +83,8 @@ keywordTranslator = require("keyword_translator").new({
 - **提示无法读取：**该编辑器的辅助功能支持不足。选中文字后再试，或使用手动复制、菜单翻译预览。
 - **Google 翻译限流／网络错误：**原文不会被替换，稍后手动重试。
 - **提示无法确认粘贴结果：**检查文本框内容，不要立即重复触发；软件可能拒绝或延迟处理粘贴，需要专门适配。
-- **无法恢复：**恢复仅在 12 秒内、原文本框和记录状态仍可验证时生效。软件自身的撤销是否可用取决于该软件。
+- **提示选区无法设置：**这不是辅助功能权限未开启的结论。目标编辑器可能不支持写入选区；先手动选中文字再试。
+- **撤销：**在原文本框按 **Command + Z**；具体行为由软件的撤销历史决定。
 
 ## 升级或卸载
 
@@ -99,5 +98,7 @@ npm run test:hammerspoon
 ```
 
 Node.js 检查包含安装备份、原配置保留与重复安装。Lua 检查使用模拟 Hammerspoon／macOS 接口验证业务流程；优先使用系统 Lua 5.3+，本机未安装 Lua 时可使用 Hammerspoon 自带 Lua 库。它们不能代替具体软件中的实际测试。
+
+另有 `tools/hammerspoon-native-check.mjs` 用于原生回填测试，需要已授权的 Hammerspoon 实例在 Console 临时运行 `require("hs.ipc")`，并提供 `PLAYWRIGHT_MODULE` 和 `BROWSER_EXECUTABLE`。测试会打开带临时配置的浏览器窗口，使用自建文本框和已知译文验证实际 AX 选区、粘贴、剪贴板恢复与 Command + Z；不会读写日常浏览器页面。运行时请暂停键盘和鼠标操作，结束后 Reload Config 关闭临时 IPC 接口。它不验证真实翻译网络服务。
 
 接口依据：[文本访问](https://www.hammerspoon.org/docs/hs.axuielement.html)、[键盘事件](https://www.hammerspoon.org/docs/hs.eventtap.html)、[剪贴板](https://www.hammerspoon.org/docs/hs.pasteboard.html)。

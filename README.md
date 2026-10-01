@@ -19,7 +19,7 @@
 
 安装并运行 [Hammerspoon](https://www.hammerspoon.org/)，授予 macOS 辅助功能权限，在项目根目录运行 `python3 hammerspoon/install.py`，然后在 Hammerspoon 菜单中选择 **Reload Config**。
 
-安装程序会备份并保留原有 `init.lua`，追加独立模块。默认 **Control + Option + '** 翻译，**Control + Option + Shift + '** 在 12 秒内恢复原文；与油猴版使用不同快捷键，可同时安装。
+安装程序会备份并保留原有 `init.lua`，追加独立模块。默认 **Control + Option + '** 翻译，用目标软件的 **Command + Z** 撤销；与油猴版使用不同快捷键，可同时安装。
 
 支持选区优先、无选区时处理当前实际行、按应用禁用及剪贴板保护。无法准确读取的编辑器提供译文预览或手动复制后翻译，不直接替换。具体软件的富文本格式与撤销行为仍需验证。
 

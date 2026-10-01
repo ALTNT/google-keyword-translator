@@ -12,8 +12,6 @@ BLOCK = '''
 keywordTranslator = require("keyword_translator").new({
     translateModifiers = {"ctrl", "alt"},
     translateKey = "'",
-    undoModifiers = {"ctrl", "alt", "shift"},
-    undoKey = "'",
 }):start()
 -- END keyword-translator (managed installation)
 '''
@@ -37,11 +35,22 @@ def install(directory):
             shutil.copy2(module, directory / (module.name + '.backup-' + stamp))
         shutil.copy2(source, module)
         changed.append(module)
-    if BEGIN not in original:
+    updated = original
+    if BEGIN in original:
+        start = original.index(BEGIN)
+        end = original.index(END, start)
+        block = original[start:end]
+        # Remove only retired options inside our block; preserve user hotkeys
+        # and all unrelated configuration byte-for-byte.
+        block = re.sub(r"(?m)^[ \t]*undo(?:Modifiers|Key)[ \t]*=[^\r\n]*\r?\n", '', block)
+        updated = original[:start] + block + original[end:]
+    else:
+        prefix = original if not original or original.endswith(('\n', '\r')) else original + '\n'
+        updated = prefix + BLOCK
+    if updated != original:
         if init.exists():
             shutil.copy2(init, directory / ('init.lua.backup-' + stamp))
-        prefix = original if not original or original.endswith(('\n', '\r')) else original + '\n'
-        init.write_bytes((prefix + BLOCK).encode('utf-8'))
+        init.write_bytes(updated.encode('utf-8'))
         changed.append(init)
     return changed
 
@@ -53,7 +62,7 @@ def main():
     for path in install(args.directory):
         print('Updated:', path)
     print('Installation ready. In Hammerspoon, choose Reload Config.')
-    print("Translate: Control + Option + '; restore: Control + Option + Shift + '.")
+    print("Translate: Control + Option + '; undo with the application's Command + Z.")
 
 
 if __name__ == '__main__':
