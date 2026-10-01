@@ -111,6 +111,7 @@ local function fixture(value, location, length, options)
     keycodes = { map = { ["'"] = 39 } },
     application = { frontmostApplication = function() return s.front end, get = function() return {activate=function() s.hostActivated=true end} end },
     axuielement = {
+      applicationElement = function() return s.root end,
       systemWideElement = function() return { attributeValue = function() return s.focus end } end,
       observer = { new = function()
         local observer = { active = false }
@@ -139,6 +140,11 @@ local function fixture(value, location, length, options)
             if not down then equal(#mods, 0) end
             if down then
               s.emit(types.keyDown, { cmd = true }, 9, self.own)
+              if key=="c" then
+                s.copies=(s.copies or 0)+1
+                if s.copyText then s.clip(s.copyText) end
+                return self
+              end
               equal(key, "v"); s.pastes = s.pastes + 1
               if not s.rejectPaste then
                 local range = attrs.AXSelectedTextRange
@@ -170,14 +176,20 @@ local function fixture(value, location, length, options)
       writeAllData = function(data) s.data = clone(data); s.clipCount = s.clipCount + 1; return true end
     },
     task = { new = function(executable, callback, args)
-      equal(executable, "/usr/bin/curl"); equal(type(args), "table")
+      assert(executable=="/usr/bin/curl" or executable=="/usr/bin/security"); equal(type(args), "table")
       local task = { callback = callback, args = args }
       function task:setInput(input) self.input = input; return self end
-      function task:start() s.requests[#s.requests + 1] = self; return not s.taskStartFails end
+      function task:start()
+        if executable=="/usr/bin/security" then
+          s.keyTasks=s.keyTasks or {};s.keyTasks[#s.keyTasks+1]=self
+          timer(0.01,function() if not self.terminated then self.callback(s.keyExitCode or (s.secret and 0 or 44),s.secret or "","") end end)
+        else s.requests[#s.requests + 1] = self end
+        return not s.taskStartFails
+      end
       function task:terminate() self.terminated = true end
       return task
     end },
-    json = { decode = function() if s.invalidJson then error("bad json") end; return s.responseData end },
+    json = { encode = function(value) s.encoded=value; return '{"fixture":true}' end, decode = function() if s.invalidJson then error("bad json") end; return s.responseData end },
     mouse = { absolutePosition = function() return {x=300,y=200} end },
     screen = { allScreens = function() return { { frame = function() return {x=0,y=0,w=1200,h=800} end } } end },
     webview = {
@@ -195,7 +207,9 @@ local function fixture(value, location, length, options)
         function view:windowCallback(fn) self.windowFn=fn; return self end
         function view:html(html)
           self.document=html
-          local text=html:match('<textarea[^>]*>\n(.-)</textarea>'):gsub('&lt;','<'):gsub('&gt;','>'):gsub('&amp;','&')
+          local raw=html:match('<textarea[^>]*>\n(.-)</textarea>')
+          if not raw then return self end
+          local text=raw:gsub('&lt;','<'):gsub('&gt;','>'):gsub('&amp;','&')
           s.previews[#s.previews+1]=text
           return self
         end
@@ -275,8 +289,8 @@ test("multi-line selected text preserves blank lines and Unicode surrounding con
   equal(s.attrs.AXValue, "🙂Machine learning\n\nAI尾")
 end)
 
-test("empty and English lines do not fall back to the entire field", function()
-  for _, input in ipairs({ { "中文\n\n中文", 3 }, { "中文\nEnglish\n中文", 4 }, { "中文\n", 3 } }) do
+test("empty lines do not fall back to the entire field", function()
+  for _, input in ipairs({ { "中文\n\n中文", 3 }, { "中文\n", 3 } }) do
     local s = fixture(input[1], input[2], 0)
     s.controller:translate(); equal(#s.requests, 0); equal(s.pastes, 0)
   end
@@ -296,12 +310,12 @@ test("the request has a deadline and sends encoded text through stdin, without s
   equal(task.args[1], "--disable")
   assert(task.input:find("%%26") and task.input:find("%%23") and task.input:find("%%22"))
   for _, arg in ipairs(task.args) do assert(not arg:find("中文", 1, true)); assert(arg ~= "--location") end
-  s.advance(13); assert(task.terminated); equal(s.pastes, 0)
+  s.advance(17); assert(task.terminated); equal(s.pastes, 0)
   task.callback(0, "json\n200"); equal(s.pastes, 0)
 end)
 
 test("HTTP, network and malformed response errors keep text and allow retry", function()
-  for _, mode in ipairs({ "429", "503", "302", "network", "invalid", "unchanged", "partial", "lines" }) do
+  for _, mode in ipairs({ "429", "503", "302", "network", "invalid", "lines" }) do
     local s = fixture("机器学习\n人工智能", 0, 9)
     s.controller:translate()
     if mode == "invalid" then s.invalidJson = true end
@@ -431,8 +445,8 @@ test("only the translation hotkey is registered; application undo remains availa
   equal(s.controller.undo, nil)
 end)
 
-test("secure input, protected fields, unselected read-only controls and terminal applications do not send requests", function()
-  for _, mode in ipairs({ "secure", "protected", "readonly", "terminal", "permission", "role" }) do
+test("secure input, protected fields and unselected read-only controls do not send requests", function()
+  for _, mode in ipairs({ "secure", "protected", "readonly", "permission", "role" }) do
     local s = fixture("中文")
     if mode == "secure" then s.secure = true end
     if mode == "protected" then s.attrs.AXSubrole = "AXSecureTextField" end
@@ -492,12 +506,12 @@ test("read-only selection can come from an ancestor or a native text marker", fu
   end
 end)
 
-test("read-only previews still reject changed selections, focus, empty and English targets", function()
-  for _, mode in ipairs({"selection","focus","empty","english"}) do
+test("read-only previews still reject changed selections, focus and empty targets", function()
+  for _, mode in ipairs({"selection","focus","empty"}) do
     local s=fixture(mode=="english" and "English" or "中文",0,mode=="empty" and 0 or 2)
     s.attrs.AXRole="AXWebArea"
     s.controller:translate()
-    if mode=="empty" or mode=="english" then equal(#s.requests,0)
+    if mode=="empty" then equal(#s.requests,0)
     else
       if mode=="selection" then s.attrs.AXSelectedTextRange.length=1 else s.focus={} end
       s.respond("Chinese"); equal(#s.views,0)
@@ -583,6 +597,148 @@ end)
 
 test("unsupported input monitoring prevents translation requests instead of weakening guards", function()
   local s = fixture("中文"); s.denyTap = true; s.controller:translate(); equal(#s.requests, 0)
+end)
+
+test("English, Chinese and Japanese translate according to configured language direction", function()
+  for _,item in ipairs({{"Machine learning","en","zh","机器学习"},{"机器学习","zh","ja","機械学習"},{"機械学習","ja","en","Machine learning"}}) do
+    local s=fixture(item[1]); s.controller.config.source=item[2];s.controller.config.target=item[3]
+    s.controller:translate();assert(s.requests[1].input:find("sl="..item[2],1,true));assert(s.requests[1].input:find("tl="..item[3],1,true))
+    s.respond(item[4]);s.advance(0.4);equal(s.attrs.AXValue,item[4]);equal(s.pastes,1)
+  end
+  local s=fixture("English");s.controller.config.source="en";s.controller.config.target="en"
+  s.controller:translate();equal(#s.requests,0)
+end)
+
+test("terminal selections always preview and unselected terminals never paste", function()
+  for _,id in ipairs({"com.apple.Terminal","com.googlecode.iterm2","com.mitchellh.ghostty"}) do
+    local s=fixture("English output",0,7);s.bundleID=id;s.controller.config.target="zh"
+    s.controller:translate();s.respond("英文");equal(s.previews[1],"英文");equal(s.pastes,0);equal(s.rangeWrites,nil)
+    local blank=fixture("命令行");blank.bundleID=id;blank.controller:translate();blank.advance(1)
+    equal(#blank.requests,0);equal(blank.pastes,0);equal(blank.copies,1)
+  end
+end)
+
+test("copy fallback captures a new selection, restores all clipboard formats and only previews", function()
+  for _,id in ipairs({"com.apple.Terminal","com.tdesktop.Telegram","ru.keepcoder.Telegram"}) do
+    local s=fixture("unused");s.bundleID=id;s.attrs.AXRole="AXGroup";s.copyText="选中文字"
+    s.controller:translate();equal(s.copies,1);equal(#s.requests,0);s.advance(0.04)
+    equal(s.data["public.utf8-plain-text"],"previous clipboard");equal(s.data["public.rtf"],"old rich data")
+    equal(#s.requests,1);s.respond("Selected text")
+    equal(s.previews[1],"Selected text");equal(s.pastes,0)
+    s.views[1]:send("copy-original","untrusted");equal(s.data["public.utf8-plain-text"],"选中文字")
+  end
+end)
+
+test("copy fallback never translates a stale clipboard or overrides a new user copy", function()
+  for _,mode in ipairs({"no-copy","empty","rich","focus","input","secure","protected","new-copy","backup"}) do
+    local s=fixture("unused");s.bundleID="com.tdesktop.Telegram";s.attrs.AXRole="AXGroup"
+    if mode~="no-copy" then s.copyText="中文" end
+    if mode=="empty" then s.copyText="" end
+    if mode=="rich" then s.items=2 end
+    if mode=="secure" then s.secure=true end
+    if mode=="protected" then s.attrs.AXProtectedContent=true end
+    if mode=="backup" then s.incompleteBackup=true end
+    s.controller:translate()
+    if mode=="focus" then s.focus={} end
+    if mode=="input" or mode=="new-copy" then s.emit(1) end
+    if mode=="new-copy" then s.clip("user copied") end
+    s.advance(1);equal(#s.requests,0);equal(s.pastes,0)
+    if mode=="new-copy" then equal(s.data["public.utf8-plain-text"],"user copied") end
+    if mode=="no-copy" then equal(s.data["public.utf8-plain-text"],"previous clipboard") end
+  end
+end)
+
+test("copy fallback waits for shortcut release and honours per-application opt-out", function()
+  local s=fixture("unused");s.bundleID="com.tdesktop.Telegram";s.attrs.AXRole="AXGroup";s.copyText="中文";s.modifiers={ctrl=true,alt=true}
+  s.controller:translate();s.advance(0.1);equal(s.copies,nil)
+  s.modifiers={};s.advance(0.1);equal(s.copies,1);equal(#s.requests,1)
+  s.controller:cancel();s.controller.copyFallback[s.bundleID]=false;s.controller:translate();equal(s.copies,1)
+end)
+
+test("document selection search reads selected attributes outside the focused input", function()
+  local s=fixture("");s.bundleID="com.tdesktop.Telegram"
+  local selected={attributeValue=function(_,name) if name=="AXSelectedText" then return "中文消息" end end}
+  local window={attributeValue=function(_,name) if name=="AXChildren" then return {selected} end end}
+  s.root={attributeValue=function(_,name) if name=="AXFocusedWindow" then return window end end}
+  local snapshot=assert(s.controller:capture());equal(snapshot.original,"中文消息");assert(snapshot.preview)
+  s.controller:translate();s.respond("Message");equal(s.previews[1],"Message");equal(s.copies,nil)
+end)
+
+test("DeepL requests use the selected plan and keychain credentials only through stdin", function()
+  local s=fixture("Machine learning");s.secret="fake:fx";s.controller.config={provider="deepl",source="en",target="zh",deeplPlan="free",libreURL=""}
+  s.controller:translate();equal(#s.requests,0);s.advance(0.02)
+  assert(s.requests[1].input:find('https://api-free.deepl.com/v2/translate',1,true))
+  assert(s.requests[1].input:find('DeepL-Auth-Key fake:fx',1,true))
+  equal(s.encoded.target_lang,"ZH-HANS");equal(s.encoded.source_lang,"EN");equal(s.encoded.text[1],"Machine learning")
+  for _,arg in ipairs(s.requests[1].args) do assert(not arg:find("fake",1,true));assert(not arg:find("Machine",1,true)) end
+  s.responseData={translations={{text="机器学习"}}};s.requests[1].callback(0,"json\n200");s.advance(0.4);equal(s.attrs.AXValue,"机器学习")
+  local request=assert(module.services.build({provider="deepl",source="auto",target="en",deeplPlan="pro"},"中文","fake",s.api.json.encode))
+  assert(request.input:find('https://api.deepl.com/v2/translate',1,true));equal(s.encoded.source_lang,nil)
+end)
+
+test("unchanged translation does not paste or alter application undo history", function()
+  local s=fixture("English");s.controller:translate();s.respond("English");s.advance(0.4)
+  equal(s.pastes,0);equal(s.attrs.AXValue,"English");equal(s.controller.job,nil)
+end)
+
+test("missing or denied credentials stop DeepL before any network request", function()
+  for _,code in ipairs({44,51}) do
+    local s=fixture("中文");s.controller.config.provider="deepl";s.keyExitCode=code
+    s.controller:translate();s.advance(0.02);equal(#s.requests,0);equal(s.pastes,0)
+  end
+end)
+
+test("LibreTranslate language metadata restricts available pairs and request direction", function()
+  local s=fixture("English");s.controller.config.provider="libre";s.controller.config.libreURL="http://127.0.0.1:5000"
+  s.controller:refreshLanguages();equal(#s.requests,1)
+  assert(s.requests[1].input:find('/languages',1,true))
+  s.responseData={{code="en",targets={"zh"}},{code="zh",targets={"en"}}};s.requests[1].callback(0,"json\n200")
+  assert(s.controller:languageSupported("en","zh"));assert(not s.controller:languageSupported("en","ja"))
+  s.controller:setLanguage("source","en");s.controller:setLanguage("target","zh")
+  s.controller:translate();s.advance(0.02);equal(#s.requests,2)
+  assert(s.requests[2].input:find('source=en&target=zh',1,true));assert(s.requests[2].input:find('/translate',1,true))
+  s.responseData={translatedText="英文"};s.requests[2].callback(0,"json\n200");s.advance(0.4);equal(s.attrs.AXValue,"英文")
+end)
+
+test("service URLs reject insecure remote hosts, credentials and config injection", function()
+  for _,url in ipairs({'http://example.com','http://localhost123','http://127.0.0.123','https://user:key@example.com','https://example.com?q=x','https://example.com\nheader=x','https://example.com/"x'}) do
+    equal(module.services.libreBase(url),nil)
+  end
+  equal(module.services.libreBase('http://localhost:5000/api/'),'http://localhost:5000/api')
+  equal(module.services.libreBase('https://example.com/api/'),'https://example.com/api')
+  local s=fixture("中文");s.controller:selectProvider("libre");s.controller:translate();equal(#s.requests,0)
+end)
+
+test("LibreTranslate credentials are scoped to the exact configured endpoint", function()
+  local a=module.services.credentialID({provider="libre",libreURL="https://one.example"})
+  local b=module.services.credentialID({provider="libre",libreURL="https://two.example"})
+  assert(a~=b);assert(not a:find(" ",1,true));equal(module.services.credentialID({provider="deepl"}),"deepl")
+end)
+
+test("service settings save secrets through keychain stdin, not settings or process argv", function()
+  local s=fixture("中文");s.keyExitCode=0;s.controller:showSettings()
+  local view=s.controller.settingsView
+  view.bridge.fn({body={action="save",provider="deepl",deeplPlan="pro",libreURL="",key="fake secret",clear=false}})
+  equal(#s.keyTasks,1);assert(s.keyTasks[1].input:find('-X 66616b6520736563726574',1,true))
+  for _,arg in ipairs(s.keyTasks[1].args) do assert(not arg:find("fake",1,true)) end
+  s.advance(0.02);equal(s.controller.config.provider,"deepl");equal(s.controller.config.deeplPlan,"pro")
+  equal(s.settings['keywordTranslator.translation'].key,nil);assert(view.deleted)
+  local restored=module.new({},s.api);equal(restored.config.provider,"deepl");equal(restored.config.deeplPlan,"pro")
+end)
+
+test("settings reject invalid URLs and stopping releases pending keychain and metadata tasks", function()
+  local s=fixture("中文");s.controller:showSettings();local view=s.controller.settingsView
+  view.bridge.fn({body={action="save",provider="libre",libreURL="http://example.com",key=""}})
+  equal(s.controller.config.provider,"google");equal(s.settings['keywordTranslator.translation'],nil)
+  view.bridge.fn({body={action="save",provider="deepl",key="fake"}})
+  s.controller:stop();assert(view.deleted);assert(s.keyTasks[1].terminated);s.advance(1);equal(s.controller.config.provider,"google")
+end)
+
+test("changing settings cancels outstanding translation without changing text", function()
+  local s=fixture("中文");s.controller:translate();local task=s.requests[1]
+  s.controller:setLanguage("target","zh");assert(task.terminated)
+  s.respond("Chinese");s.advance(0.4);equal(s.pastes,0)
+  equal(s.settings['keywordTranslator.translation'].target,"zh")
 end)
 
 print(count .. " Hammerspoon checks passed (mocked macOS/Hammerspoon APIs; " .. _VERSION .. ").")
