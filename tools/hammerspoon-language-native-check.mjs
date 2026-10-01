@@ -73,6 +73,16 @@ try{
   call('_ktLang:closePreview()');
   assert.equal(await page.locator('#text').textContent(),'Machine learning');
   console.log('PASS native copy fallback, local translation preview, original button and complete clipboard restoration');
+  await page.locator('#text').click();await page.locator('#text').evaluate(el=>{const r=document.createRange();r.selectNodeContents(el);const s=getSelection();s.removeAllRanges();s.addRange(r)});await front();
+  // clearContents has no return value: an initially empty clipboard must still
+  // allow translation after native Cmd+C and restoration to the empty state.
+  call('hs.pasteboard.clearContents();assert(#hs.pasteboard.allContentTypes()==0);_ktLangWrittenCount=hs.pasteboard.changeCount();_ktLang:copySelection(hs.application.frontmostApplication())');
+  await until('_ktLang.previewView~=nil');await ready('previewView','translation');
+  assert.equal(await web('document.getElementById("translation").value','previewView'),'机器学习');
+  call('assert(#hs.pasteboard.allContentTypes()==0,"empty clipboard not restored");_ktLangWrittenCount=hs.pasteboard.changeCount();_ktLang:closePreview()');
+  assert.equal(requests.at(-1).q,'Machine learning');
+  assert.equal(await page.locator('#text').textContent(),'Machine learning');
+  console.log('PASS initially empty clipboard restores correctly and native copy translation opens its preview');
   await page.evaluate(()=>document.addEventListener('copy',event=>event.preventDefault()));await page.locator('#text').click();await page.locator('#text').evaluate(el=>{const r=document.createRange();r.selectNodeContents(el);const s=getSelection();s.removeAllRanges();s.addRange(r)});await front();
   const before=requests.length;
   call('_ktLangNoCopyCount=hs.pasteboard.changeCount();_ktLang:copySelection(hs.application.frontmostApplication())');await until('_ktLang.job==nil');

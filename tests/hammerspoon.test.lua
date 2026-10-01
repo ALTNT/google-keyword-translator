@@ -163,7 +163,11 @@ local function fixture(value, location, length, options)
     },
     pasteboard = {
       changeCount = function() return s.clipCount end,
-      allContentTypes = function() local items = {}; for i = 1, s.items do items[i] = { "public.utf8-plain-text", "public.rtf" } end; return items end,
+      allContentTypes = function()
+        if next(s.data)==nil then return {} end
+        local types={};for uti in pairs(s.data) do types[#types+1]=uti end
+        local items={};for i=1,s.items do items[i]=types end;return items
+      end,
       readAllData = function()
         local data = clone(s.data)
         if s.changeDuringBackup then s.clip("new during backup") end
@@ -172,7 +176,11 @@ local function fixture(value, location, length, options)
       end,
       setContents = function(text) if s.denyClipboard then return false end; s.clip(text); return true end,
       getContents = function() return s.data["public.utf8-plain-text"] end,
-      clearContents = function() s.data = {}; s.clipCount = s.clipCount + 1; return true end,
+      clearContents = function()
+        if s.denyClear then return end
+        s.data = {}; s.clipCount = s.clipCount + 1
+        -- Match Hammerspoon's actual no-return-value contract.
+      end,
       writeAllData = function(data) s.data = clone(data); s.clipCount = s.clipCount + 1; return true end
     },
     task = { new = function(executable, callback, args)
@@ -627,6 +635,23 @@ test("copy fallback captures a new selection, restores all clipboard formats and
     equal(s.previews[1],"Selected text");equal(s.pastes,0)
     s.views[1]:send("copy-original","untrusted");equal(s.data["public.utf8-plain-text"],"选中文字")
   end
+end)
+
+test("copy fallback restores an empty clipboard even though clearContents returns nothing", function()
+  local s=fixture("unused");s.bundleID="com.tencent.xinWeChat";s.attrs.AXRole="AXGroup"
+  s.data={};s.copyText="中文";s.controller.copyFallback[s.bundleID]=true
+  s.controller:translate();s.advance(0.04)
+  equal(next(s.data),nil);equal(#s.requests,1)
+  s.respond("Chinese");equal(s.previews[1],"Chinese");equal(s.pastes,0)
+  s.views[1]:send("copy-original","unexpected");equal(s.data["public.utf8-plain-text"],"中文")
+end)
+
+test("copy fallback still stops when clearing the old empty clipboard does not succeed", function()
+  local s=fixture("unused");s.bundleID="com.tencent.xinWeChat";s.attrs.AXRole="AXGroup"
+  s.data={};s.copyText="中文";s.denyClear=true;s.controller.copyFallback[s.bundleID]=true
+  s.controller:translate();s.advance(0.04)
+  equal(#s.requests,0);equal(s.pastes,0);equal(s.data["public.utf8-plain-text"],"中文")
+  equal(s.controller.status,"无法恢复原剪贴板，未请求翻译。")
 end)
 
 test("copy fallback never translates a stale clipboard or overrides a new user copy", function()

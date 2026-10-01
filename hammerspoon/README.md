@@ -108,6 +108,7 @@ LibreTranslate 地址必须使用 HTTPS；仅 `localhost`、`127.0.0.1` 和 `[::
 - **快捷键无反应：**先确认已 Reload Config、出现“译→EN”或对应方向菜单，以及辅助功能权限已开启。检查快捷键冲突和输入法选词状态；权限改变后必要时重启 Hammerspoon。
 - **提示无法读取：**选中文字后再试；必要时开启该应用的复制读取，或手动复制后菜单翻译。
 - **提示未复制到文字：**应用没有更新剪贴板或禁止复制，不会拿旧剪贴板翻译。
+- **提示无法恢复原剪贴板：**1.2.0 在原剪贴板为空时会把成功清空误判为失败，1.2.1 已修复。升级后若仍提示，可能是恢复写入失败或剪贴板在读取期间再次改变；此时不会请求翻译。
 - **认证失败／额度用完：**检查服务密钥、DeepL API 套餐或额度。
 - **没有 LibreTranslate 语言选项：**检查服务地址并刷新语言列表。
 - **Google 翻译限流／网络错误：**原文不会被替换，稍后手动重试。
@@ -132,6 +133,6 @@ Node.js 检查包含安装备份、原配置保留与重复安装。Lua 检查�
 
 `tools/hammerspoon-preview-native-check.mjs` 使用相同环境变量，实测网页正文及只读 textarea 的选区读取、原生译文窗口、真实键盘编辑、原文和译文复制按钮、网页复制事件绕过、原文换行与 emoji 保留、按钮布局、关闭及 HTML 字符安全显示；只模拟翻译响应。
 
-`tools/hammerspoon-language-native-check.mjs` 使用隔离浏览器、本机 LibreTranslate 协议夹具和内存设置，实测设置表单、地址校验、语言列表、英文到中文回填及 Command + Z、复制读取与剪贴板恢复、复制失败不使用旧剪贴板。未使用真实 DeepL 密钥。
+`tools/hammerspoon-language-native-check.mjs` 使用隔离浏览器、本机 LibreTranslate 协议夹具和内存设置，实测设置表单、地址校验、语言列表、英文到中文回填及 Command + Z、复制读取与剪贴板恢复（包括原剪贴板为空）、复制失败不使用旧剪贴板。未使用真实 DeepL 密钥。
 
 接口依据：[文本访问](https://www.hammerspoon.org/docs/hs.axuielement.html)、[键盘事件](https://www.hammerspoon.org/docs/hs.eventtap.html)、[剪贴板](https://www.hammerspoon.org/docs/hs.pasteboard.html)。

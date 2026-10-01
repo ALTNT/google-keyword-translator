@@ -1,6 +1,6 @@
 -- Translate selected text or the current line in macOS. No configuration is
 -- changed on require(); call new(options):start() explicitly.
-local M = { version = "1.2.0" }
+local M = { version = "1.2.1" }
 local Text = {}
 M.text = Text
 
@@ -454,7 +454,12 @@ function Controller:copySelection(app)
     local ownedCount
     job.cleanup=function()
       if ownedCount and api.pasteboard.changeCount()==ownedCount then
-        if next(saved)==nil then return api.pasteboard.clearContents() else return api.pasteboard.writeAllData(saved) end
+        if next(saved)==nil then
+          -- clearContents() has no return value; verify the empty state instead.
+          api.pasteboard.clearContents()
+          return #api.pasteboard.allContentTypes()==0
+        end
+        return api.pasteboard.writeAllData(saved)
       end
       return false
     end
